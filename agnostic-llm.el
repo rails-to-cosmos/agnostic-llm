@@ -1037,7 +1037,7 @@ untouched."
 ;;; Prompt History
 
 (defun agnostic-llm--prompts-dir (&optional root)
-  "Absolute path to the prompts directory for ROOT.
+  "Return the absolute path to ROOT's prompt directory.
 Honors `agnostic-llm-persistence-strategy'."
   (agnostic-llm--persistence-dir (or root (agnostic-llm--current-root)) "prompts"))
 
@@ -1065,7 +1065,7 @@ Honors `agnostic-llm-persistence-strategy'."
 
 ;;;###autoload
 (defun agnostic-llm-prompt-history ()
-  "Browse saved prompts for the current project.
+  "Browse this project's saved prompt files.
 Picks a prompt via `completing-read' and opens it in the bubble
 for editing and re-sending."
   (interactive)
@@ -1107,8 +1107,8 @@ for editing and re-sending."
   "Face applied to lines added or changed in the last auto-revert.")
 
 (defvar agnostic-llm--pre-revert-contents (make-hash-table :test 'equal)
-  "Hash-table mapping absolute file paths to their buffer text captured
-just before `auto-revert-mode' reverts them.")
+  "Hash-table of absolute file path to pre-revert buffer text.
+Each entry is captured just before `auto-revert-mode' reverts the file.")
 
 (defvar-local agnostic-llm--change-highlight-timer nil
   "Buffer-local idle timer that removes `agnostic-llm-change-highlight' overlays.")
@@ -1201,7 +1201,7 @@ where the timer fires but nothing actually changed on disk)."
 
 (defun agnostic-llm--cycle-buffer (direction)
   "Switch current window to the next/previous claude buffer.
-DIRECTION is +1 (forward) or -1 (backward). Buffers already visible
+DIRECTION is +1 (forward) or -1 (backward).  Buffers already visible
 in another window are deprioritized (sorted to the back), so cycling
 prefers ones not yet on screen."
   (let ((bufs (sort (agnostic-llm--get-buffers)
@@ -1518,10 +1518,10 @@ Source-file comment is left untouched — remove it manually if desired."
     (if (equal val "default") nil val)))
 
 (defun agnostic-llm--menu-current-model ()
-  "The model in effect for `agnostic-llm-menu': the `-m' override, else
-`agnostic-llm-model'.
-Guarded so it is safe to call while the transient is live (e.g. from an
-infix `:choices' function)."
+  "Return the model in effect for `agnostic-llm-menu'.
+That is the `-m' override, else `agnostic-llm-model'.  Guarded so it is
+safe to call while the transient is live (e.g. from an infix `:choices'
+function)."
   (or (ignore-errors (agnostic-llm--menu-flag "--model="))
       agnostic-llm-model))
 
@@ -1718,8 +1718,9 @@ resize corrects the mismatch once the buffer is displayed."
 ;;; Vterm copy helper (for TUIs that redraw and stomp on selections)
 
 (defvar-local agnostic-llm--vterm-copy-resume nil
-  "Non-nil when leaving `vterm-copy-mode' should resume a process this
-buffer suspended via `agnostic-llm-vterm-copy'.")
+  "Non-nil when exiting `vterm-copy-mode' should resume a suspended process.
+Set in a buffer whose foreground process `agnostic-llm-vterm-copy'
+suspended.")
 
 (defun agnostic-llm--vterm-copy-resume-on-exit ()
   "Send `fg' when copy-mode is disabled in a buffer flagged for resume."
@@ -1729,7 +1730,7 @@ buffer suspended via `agnostic-llm-vterm-copy'.")
 
 (defun agnostic-llm-vterm-copy ()
   "Suspend the foreground vterm process and enter `vterm-copy-mode'.
-Resumes the process automatically when copy-mode is exited (q / C-c C-t).
+Resumes the process automatically when copy-mode is exited.
 
 Useful for copying from TUIs (e.g. interactive `claude') that
 continuously redraw and overwrite selections.  No-op outside vterm."
@@ -1775,9 +1776,9 @@ Defaults to claude buffers only, so plain `*vterm:…*' shells are untouched."
 
 (defvar-local agnostic-llm--vterm-autofreeze-active nil
   "Non-nil when copy-mode in this buffer was entered BY auto-freeze.
-As opposed to the manual `agnostic-llm-vterm-copy' / `C-c C-y' workflow
-or a bare `vterm-copy-mode'.  Scopes the resume overlay map and the
-header-line so manual copy-mode keeps vanilla behavior.")
+As opposed to the manual `agnostic-llm-vterm-copy' workflow or a bare
+`vterm-copy-mode'.  Scopes the resume overlay map and the header-line so
+manual copy-mode keeps vanilla behavior.")
 
 (defun agnostic-llm--vterm-autofreeze-p ()
   "Non-nil if auto-freeze should manage the current buffer."
@@ -1797,7 +1798,7 @@ there means we are following; being above it means the user scrolled up."
   "Enter copy-mode to freeze the view (XOFF pauses claude).  Idempotent.
 Sets `agnostic-llm--vterm-autofreeze-active' so only our managed freeze gets the
 resume overlay map + header-line, and leaves `agnostic-llm--vterm-copy-resume' nil
-so exiting sends only XON, never the `fg' of the C-c C-y suspend path."
+so exiting sends only XON, never the `fg' of the manual suspend path."
   ;; (unless (or (bound-and-true-p vterm-copy-mode)
   ;;             agnostic-llm--vterm-autofreeze-armed)
   ;;   (let ((agnostic-llm--vterm-autofreeze-armed t))
@@ -1829,8 +1830,8 @@ scroll or move point up.  Skips mid-toggle calls via the armed guard."
     (agnostic-llm--vterm-freeze)))
 
 (defun agnostic-llm--vterm-resume-and-resend ()
-  "Thaw, then replay the triggering key into the live terminal so it is
-not lost.  Bound to self-inserting keys while auto-frozen."
+  "Thaw, then replay the triggering key into the live terminal.
+The key is not lost.  Bound to self-inserting keys while auto-frozen."
   (interactive)
   (let ((keys (this-command-keys-vector)))
     (agnostic-llm--vterm-resume)
@@ -1854,14 +1855,14 @@ Layered above `vterm-copy-mode-map' so it adds resume keys without
 overriding copy-mode's bindings.  Note: this rebinds RET to
 resume-and-send-newline; drop the RET/<return> entries if you prefer
 RET to copy the line (`vterm-copy-mode-done').
-Deliberately does NOT bind C-d (EOF) or C-c C-c (SIGINT), so a stray key
-while reading can never end or interrupt claude.")
+Deliberately binds neither EOF nor SIGINT, so a stray key while reading
+can never end or interrupt claude.")
 
 (defun agnostic-llm--vterm-autofreeze-copy-hook ()
   "Run on `vterm-copy-mode-hook' (fires on BOTH enable and disable).
 On enable of an auto-freeze-initiated copy-mode, install the resume
 overlay map.  On disable, clear our header-line and flag.  Manual
-`vterm-copy-mode' / `C-c C-y' sessions (active flag nil) stay vanilla."
+`vterm-copy-mode' sessions (active flag nil) stay vanilla."
   (when (agnostic-llm--vterm-autofreeze-p)
     (cond
      ((and (bound-and-true-p vterm-copy-mode)

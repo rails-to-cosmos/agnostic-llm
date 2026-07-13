@@ -34,14 +34,9 @@ lint: checkdoc
 checkdoc:
 	$(EMACS) --batch \
 	  --eval "(require 'checkdoc)" \
-	  --eval "(let ((checkdoc-diagnostic-buffer \"*stdout*\") (found nil)) \
-	            (with-current-buffer (find-file-noselect \"$(PACKAGE)\") \
-	              (let ((buf (checkdoc-file \"$(PACKAGE)\"))) \
-	                (when (and buf (get-buffer \"*Warnings*\")) \
-	                  (setq found t)))) \
-	            (when (get-buffer \"*Warnings*\") \
-	              (princ (with-current-buffer \"*Warnings*\" (buffer-string))) \
-	              (kill-emacs 1)))"
+	  --eval "(setq checkdoc-autofix-flag 'never)" \
+	  --eval "(checkdoc-file \"$(PACKAGE)\")" \
+	  --eval "(when (get-buffer \"*Warnings*\") (kill-emacs 1))"
 
 compile: clean
 	$(EMACS) --batch \
