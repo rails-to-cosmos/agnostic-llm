@@ -1,0 +1,8 @@
+*.elc
+/.cask/
+/dist/
+*~
+\#*\#
+.\#*
+.project/
+.llm/

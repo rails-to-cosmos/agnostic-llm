@@ -1,0 +1,5 @@
+;; Submission recipe for melpa/melpa.
+;; Copy this into melpa/melpa/recipes/agnostic-llm in a PR (file name: just "agnostic-llm").
+(agnostic-llm :fetcher github
+              :repo "rails-to-cosmos/agnostic-llm"
+              :files (:defaults))
