@@ -10,7 +10,7 @@
 ;;; Commentary:
 ;;
 ;; Drive the `claude' CLI (https://docs.anthropic.com/en/docs/claude-cli)
-;; from Emacs.  Each project gets a dedicated `*claude:PROJECT*' vterm; a
+;; from Emacs.  Each project gets a dedicated `*llm:PROJECT*' vterm; a
 ;; multi-line prompt buffer with @file completion feeds it, and a throwaway
 ;; "bubble" streams a `claude -p' reply inline without disturbing the main
 ;; session.  `agnostic-llm-show-last-response' renders the latest assistant
@@ -60,7 +60,7 @@
 
 (defcustom agnostic-llm-dangerously-skip-permissions nil
   "When non-nil, pass `--dangerously-skip-permissions' to claude.
-Applies to the main `*claude:PROJECT*' vterm and to the inline
+Applies to the main `*llm:PROJECT*' vterm and to the inline
 bubble (captured once at bubble creation as buffer-local state).
 
 Normally toggled per-invocation via the `-d' switch in `agnostic-llm-menu'
@@ -106,7 +106,7 @@ is passed through verbatim — full names like \"claude-opus-4-7\" or
 aliases like \"opus\" both work.
 
 Normally toggled per-invocation via the `-m' switch in `agnostic-llm-menu'
-rather than set directly.  Applies to the main `*claude:PROJECT*'
+rather than set directly.  Applies to the main `*llm:PROJECT*'
 vterm and to the inline bubble (captured once at bubble creation)."
   :type '(choice (const :tag "Default (claude picks)" nil)
                  (string :tag "Model name"))
@@ -209,7 +209,7 @@ The home directory is never treated as a project root.  Markers there
 are global config, not project markers — most importantly `~/.claude',
 claude's own config dir, which matches the `.claude' marker.  Without
 this guard every markerless directory under HOME would resolve to HOME
-and share one `*claude:~*' buffer."
+and share one `*llm:~*' buffer."
   (let ((home (expand-file-name "~/")))
     (or (when-let ((root (locate-dominating-file
                           dir
@@ -304,9 +304,8 @@ path component."
     (cons (file-name-nondirectory (directory-file-name root))
           root)))
 
-(defconst agnostic-llm--session-buffer-prefix "*claude:"
+(defconst agnostic-llm--session-buffer-prefix "*llm:"
   "Prefix of the per-project agent session vterm buffer name.
-Claude is the first backend, so the visible prefix still reads `claude';
 `agnostic-llm--session-buffer-name' appends the project label and a
 closing `*'.  Once the backend abstraction in
 docs/multi-backend-design.org lands, the label comes from the active
@@ -314,9 +313,9 @@ backend.")
 
 (defun agnostic-llm--session-buffer-name (label)
   "Return the agent session vterm buffer name for project LABEL.
-Single source of truth for the `*claude:PROJECT*' buffer name, shared by
-`agnostic-llm', `agnostic-llm--bubble-promote', and
-`agnostic-llm-toggle-vterm-claude'.  The prefix comes from
+Single source of truth for the `*llm:PROJECT*' buffer name, shared
+by `agnostic-llm', `agnostic-llm--bubble-promote', and
+`agnostic-llm-toggle-vterm-session'.  The prefix comes from
 `agnostic-llm--session-buffer-prefix', which the active backend supplies
 once the backends in docs/multi-backend-design.org exist."
   (format "%s%s*" agnostic-llm--session-buffer-prefix label))
@@ -360,7 +359,7 @@ Appends `--model' when `agnostic-llm-model' is set, `--effort' when
 
 ;;; Show last response in a side buffer
 ;;
-;; Reads the current *claude:* vterm's session JSONL (newest .jsonl in the
+;; Reads the current *llm:* vterm's session JSONL (newest .jsonl in the
 ;; buffer's project dir, via `agnostic-llm--claude-session-dir') and renders Claude's
 ;; most recent assistant turn into a plain-text buffer in another window.
 ;; Nothing is written to disk.
@@ -467,11 +466,11 @@ Current buffer is fresh and current; leaves it in `fundamental-mode'."
 ;;;###autoload
 (defun agnostic-llm-show-last-response ()
   "Show the current claude session's latest response in another window.
-Must be invoked from a `*claude:PROJECT*' vterm.  Locates that buffer's
+Must be invoked from a `*llm:PROJECT*' vterm.  Locates that buffer's
 session JSONL (newest .jsonl under its project dir) without writing
 anything to disk, extracts the most recent assistant turn, and renders it
 via `agnostic-llm-response-render-function' into a reused
-`*claude-response:LABEL*' buffer shown in another window, with point at
+`*llm-response:LABEL*' buffer shown in another window, with point at
 the top."
   (interactive)
   (unless (agnostic-llm-buffer-p)
@@ -484,7 +483,7 @@ the top."
     (let ((response (agnostic-llm--extract-last-response (agnostic-llm--session-records file))))
       (unless response
         (user-error "No assistant response found in latest turn"))
-      (let ((buf (get-buffer-create (format "*claude-response:%s*" label))))
+      (let ((buf (get-buffer-create (format "*llm-response:%s*" label))))
         (with-current-buffer buf
           (let ((inhibit-read-only t))
             (when (bound-and-true-p view-mode) (view-mode -1))
@@ -498,7 +497,7 @@ the top."
 
 ;;;###autoload
 (defun agnostic-llm (&optional user-root)
-  "Open Claude CLI in a vterm buffer named *claude:project*.
+  "Open Claude CLI in a vterm buffer named *llm:project*.
 With non-nil USER-ROOT, target that directory instead of the current
 project.
 Without prefix: reuse the existing buffer, or create one.
@@ -708,7 +707,7 @@ once the first reply has settled and subsequent turns are being typed.")
   "UUID pinning every turn of this bubble to the same claude session.
 Generated lazily on bubble creation; used with `--session-id' on every
 `claude -p' invocation and with `--resume' when promoting to a
-full `*claude:PROJECT*' vterm.")
+full `*llm:PROJECT*' vterm.")
 
 (defvar-local agnostic-llm--bubble-model nil
   "Buffer-local copy of `agnostic-llm-model' captured at bubble creation.
@@ -850,7 +849,7 @@ claude turn marker."
                              'face 'agnostic-llm-bubble-header-face))))))))
 
 (defun agnostic-llm--bubble-promote ()
-  "Close the bubble and open a `*claude:PROJECT*' vterm on the same session.
+  "Close the bubble and open a `*llm:PROJECT*' vterm on the same session.
 The new vterm continues the same session the popup has been driving.
 
 Every popup turn runs with `--session-id <UUID>', so the conversation
@@ -897,7 +896,7 @@ preset, so it is directly bindable and transient-invokable without
 The bubble runs `claude -p', which is non-interactive: any tool that
 would normally ask you something (permission prompts, AskUserQuestion)
 is auto-failed by the CLI before reaching us.  If a turn needs that kind
-of interaction, promote with \\<agnostic-llm-prompt-mode-map>\\[agnostic-llm--bubble-promote] to a `*claude:PROJECT*' vterm
+of interaction, promote with \\<agnostic-llm-prompt-mode-map>\\[agnostic-llm--bubble-promote] to a `*llm:PROJECT*' vterm
 that resumes the same session."
   (interactive)
   (let ((current-prefix-arg '(4)))
@@ -1636,8 +1635,8 @@ Per-invocation overrides via the menu's `-m' switch are unaffected."
     ("h" "Clear revert highlights" agnostic-llm-change-highlight-clear)]])
 
 ;;;###autoload
-(defun agnostic-llm-toggle-vterm-claude ()
-  "Toggle current window between `*vterm:PROJECT*' and `*claude:PROJECT*'.
+(defun agnostic-llm-toggle-vterm-session ()
+  "Toggle current window between `*vterm:PROJECT*' and `*llm:PROJECT*'.
 Switches to the counterpart of the current buffer, creating it in the
 current window if missing.  When the current buffer is neither, jump
 to the project's vterm first (reusing or spawning)."

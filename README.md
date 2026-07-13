@@ -15,7 +15,7 @@ same UX lives in [`docs/multi-backend-design.org`](docs/multi-backend-design.org
 ## Features
 
 - **Project sessions** — `M-x agnostic-llm` opens a dedicated
-  `*claude:PROJECT*` [`vterm`](https://github.com/akermu/emacs-libvterm)
+  `*llm:PROJECT*` [`vterm`](https://github.com/akermu/emacs-libvterm)
   running `claude`, one per project root. It continues the most recent session
   when one exists.
 - **Prompt buffer** — `agnostic-llm-prompt` composes a multi-line prompt with
@@ -23,7 +23,7 @@ same UX lives in [`docs/multi-backend-design.org`](docs/multi-backend-design.org
   and hands it to the session. Prompts are saved to per-project history.
 - **Inline bubble** — a throwaway `claude -p` conversation that streams the
   reply inline, pinned to its own session id, without disturbing the main
-  vterm. Promote it (`C-c C-m`) to a full `*claude:PROJECT*` vterm that resumes
+  vterm. Promote it (`C-c C-m`) to a full `*llm:PROJECT*` vterm that resumes
   the same session.
 - **Response viewer** — `agnostic-llm-show-last-response` renders the latest
   assistant turn (parsed from the session JSONL) into a read-only buffer.
@@ -55,7 +55,7 @@ own config:
   :bind (("C-x y e" . agnostic-llm-menu)
          ("C-S-j"   . agnostic-llm-next-buffer)
          ("C-S-k"   . agnostic-llm-previous-buffer)
-         ("C-x C-x" . agnostic-llm-toggle-vterm-claude))
+         ("C-x C-x" . agnostic-llm-toggle-vterm-session))
   :config
   (with-eval-after-load 'vterm
     (define-key vterm-mode-map (kbd "C-c C-r")
@@ -100,7 +100,7 @@ and `-b` (`/btw` prefix) switches apply to the launched command.
 |-----------|---------------------------------------------|
 | `C-c C-c` | Send                                        |
 | `C-c C-k` | Cancel (kills the bubble subprocess if any) |
-| `C-c C-m` | Promote bubble → `*claude:PROJECT*` vterm   |
+| `C-c C-m` | Promote bubble → `*llm:PROJECT*` vterm |
 
 ## Commands
 
@@ -116,7 +116,7 @@ and `-b` (`/btw` prefix) switches apply to the launched command.
 | `agnostic-llm-describe-at-point` | Ask Claude about the symbol/region at point    |
 | `agnostic-llm-switch-buffer`     | Switch between claude buffers                  |
 | `agnostic-llm-next/previous-buffer` | Cycle claude buffers                        |
-| `agnostic-llm-toggle-vterm-claude`  | Toggle `*vterm:*` ↔ `*claude:*`             |
+| `agnostic-llm-toggle-vterm-session` | Toggle `*vterm:*` ↔ `*llm:*`       |
 | `agnostic-llm-set-default-model` | Persist the default model                      |
 | `agnostic-llm-add-fixme` / `-todo`  | Annotate at point                           |
 

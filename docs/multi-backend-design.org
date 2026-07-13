@@ -35,11 +35,14 @@ Everything claude-specific in =agnostic-llm.el= today, with its role:
   claude model catalog and its per-model =:efforts= vocabulary. Every
   entry declares its own =:efforts=; there is no fallback, so a lookup for
   an unknown model or an entry without the key returns nil.
-- Buffer naming =*claude:PROJECT*= (the session vterm) and
-  =*claude-response:LABEL*= (the response viewer). The session name is
-  now built through =agnostic-llm--session-buffer-name= over the constant
-  =agnostic-llm--session-buffer-prefix=; the response name is still built
-  inline in =agnostic-llm-show-last-response=.
+- Buffer naming is now backend-neutral: =*llm:PROJECT*= (the
+  session vterm) and =*llm-response:LABEL*= (the response
+  viewer). The session name is built through
+  =agnostic-llm--session-buffer-name= over the constant
+  =agnostic-llm--session-buffer-prefix= (the neutral default prefix); the
+  response name is still built inline in
+  =agnostic-llm-show-last-response=. Once the backend struct lands, the
+  active backend's =buffer-label= overrides the neutral default prefix.
 - =agnostic-llm-bubble-prompt-prefix= — the =/btw= slash-command
   convention prepended to bubble prompts, matching a claude custom
   command at =~/.claude/commands/btw.md=.

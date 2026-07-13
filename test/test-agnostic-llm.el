@@ -161,5 +161,26 @@ would fail to match \"claude-sonnet-5\" and silently lose \"ultracode\"."
                      "claude-opus-4-7" "claude-opus-4-6" "claude-sonnet-4-6"
                      "claude-haiku-4-5")))))
 
+;; ---------------------------------------------------------------------------
+;; Session buffer naming
+;; ---------------------------------------------------------------------------
+
+(ert-deftest test-session-buffer-name-neutral-prefix ()
+  "The session buffer name uses the backend-neutral prefix."
+  (should (equal (agnostic-llm--session-buffer-name "foo")
+                 "*llm:foo*")))
+
+(ert-deftest test-buffer-p-recognizes-session-name ()
+  "`agnostic-llm-buffer-p' recognizes a session-prefixed buffer.
+A plain `*vterm:…*' buffer is not recognized."
+  (let ((buf (get-buffer-create (agnostic-llm--session-buffer-name "foo"))))
+    (unwind-protect
+        (progn
+          (should (equal (buffer-name buf) "*llm:foo*"))
+          (should (agnostic-llm-buffer-p buf))
+          (should-not (agnostic-llm-buffer-p (get-buffer-create "*vterm:foo*"))))
+      (kill-buffer buf)
+      (when (get-buffer "*vterm:foo*") (kill-buffer "*vterm:foo*")))))
+
 (provide 'test-agnostic-llm)
 ;;; test-agnostic-llm.el ends here
