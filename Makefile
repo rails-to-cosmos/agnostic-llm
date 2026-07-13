@@ -1,7 +1,7 @@
 EMACS   ?= emacs
 PACKAGE := agnostic-llm.el
 
-.PHONY: all check lint checkdoc compile test clean help major minor patch
+.PHONY: all check lint checkdoc compile test clean help
 
 all: lint compile test
 
@@ -14,9 +14,11 @@ help:
 	@echo "  compile  Byte-compile with warnings as errors"
 	@echo "  test     Run the ERT suite in batch mode"
 	@echo "  clean    Remove .elc files"
-	@echo "  major    Bump the major part of Package-Version (X.y.z -> X+1.0.0)"
-	@echo "  minor    Bump the minor part of Package-Version (x.Y.z -> x.Y+1.0)"
-	@echo "  patch    Bump the patch part of Package-Version (x.y.Z -> x.y.Z+1)"
+	@echo "  major    Bump MAJOR, reset lower parts, stamp date, reset REV"
+	@echo "  minor    Bump MINOR, reset lower parts, stamp date, reset REV"
+	@echo "  patch    Bump PATCH, reset BUILD, stamp date, reset REV"
+	@echo "  build    Bump BUILD, stamp date, reset REV"
+	@echo "  rev      Bump REV for another release the same day"
 	@echo "  all      lint + compile + test (mirrors CI; alias: check)"
 	@echo "  help     This message"
 	@echo ""
@@ -60,14 +62,35 @@ test:
 clean:
 	rm -f *.elc
 
-major minor patch:
-	@old=$$(sed -n 's/^;; Package-Version: *//p' $(PACKAGE)); \
-	[ -n "$$old" ] || { echo "No Package-Version header in $(PACKAGE)" >&2; exit 1; }; \
-	new=$$(echo "$$old" | awk -F. -v part=$@ '{ \
-	  if (part == "major")      { $$1++; $$2 = 0; $$3 = 0 } \
-	  else if (part == "minor") { $$2++; $$3 = 0 } \
-	  else                      { $$3++ }; \
-	  printf "%d.%d.%d", $$1, $$2, $$3 }'); \
+# --- Version bumping ---------------------------------------------------------
+# agnostic-llm versions are MAJOR.MINOR.PATCH.BUILD.YYYYMMDD.REV (package-build /
+# ELPA style, e.g. 0.1.0.0.20260713.0).  `make major|minor|patch|build' bumps
+# that base component, resets the lower base components, stamps today's date and
+# resets REV; `make rev' bumps REV for another release the same day.  The version
+# is written to the Package-Version header of $(PACKAGE).
+.PHONY: major minor patch build rev bump-version
+major: BUMP := major
+minor: BUMP := minor
+patch: BUMP := patch
+build: BUMP := build
+rev:   BUMP := rev
+major minor patch build rev: bump-version
+
+bump-version:
+	@cur=`sed -n 's/^;; Package-Version: *\([0-9.]*\).*/\1/p' $(PACKAGE)`; \
+	test -n "$$cur" || { echo "error: could not read version from $(PACKAGE)"; exit 1; }; \
+	set -- `echo "$$cur" | tr '.' ' '`; \
+	maj=$${1:-0}; min=$${2:-0}; pat=$${3:-0}; bld=$${4:-0}; olddate=$${5:-0}; rev=$${6:-0}; \
+	today=`date +%Y%m%d`; \
+	case "$(BUMP)" in \
+	  major) maj=$$((maj+1)); min=0; pat=0; bld=0; rev=0 ;; \
+	  minor) min=$$((min+1)); pat=0; bld=0; rev=0 ;; \
+	  patch) pat=$$((pat+1)); bld=0; rev=0 ;; \
+	  build) bld=$$((bld+1)); rev=0 ;; \
+	  rev)   if [ "$$olddate" = "$$today" ]; then rev=$$((rev+1)); else rev=0; fi ;; \
+	  *) echo "usage: make major|minor|patch|build|rev"; exit 1 ;; \
+	esac; \
+	new="$$maj.$$min.$$pat.$$bld.$$today.$$rev"; \
 	sed -i "s/^;; Package-Version: .*/;; Package-Version: $$new/" $(PACKAGE); \
-	echo "Package-Version: $$old -> $$new"
+	echo "agnostic-llm: $$cur -> $$new"
 

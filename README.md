@@ -151,7 +151,8 @@ make lint     # package-lint + checkdoc (auto-installs package-lint from MELPA)
 make compile  # byte-compile with warnings as errors
 make test     # run the ERT suite in batch mode
 make          # lint + compile + test (mirrors CI)
-make patch    # bump Package-Version (also: minor, major)
+make patch    # bump Package-Version, ELPA style: MAJOR.MINOR.PATCH.BUILD.YYYYMMDD.REV
+              # (also: major, minor, build, rev)
 ```
 
 Byte-compiling needs `transient` and `vterm` available; `make compile` runs
