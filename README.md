@@ -8,6 +8,10 @@ an inline streaming "bubble", a response viewer, and a FIXME/TODO annotation
 system — all gathered under a [`transient`](https://github.com/magit/transient)
 menu.
 
+The package name is backend-agnostic by design: `claude` is the first backend,
+and the roadmap for driving other agentic CLIs (codex, gemini, ...) from the
+same UX lives in [`docs/multi-backend-design.org`](docs/multi-backend-design.org).
+
 ## Features
 
 - **Project sessions** — `M-x agnostic-llm` opens a dedicated
@@ -142,9 +146,11 @@ and `-b` (`/btw` prefix) switches apply to the launched command.
 ## Development
 
 ```sh
-make lint     # package-lint (auto-installs from MELPA)
+make lint     # package-lint + checkdoc (auto-installs package-lint from MELPA)
 make compile  # byte-compile with warnings as errors
-make          # both (mirrors CI)
+make test     # run the ERT suite in batch mode
+make          # lint + compile + test (mirrors CI)
+make patch    # bump Package-Version (also: minor, major)
 ```
 
 Byte-compiling needs `transient` and `vterm` available; `make compile` runs

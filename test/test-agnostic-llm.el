@@ -75,13 +75,18 @@
   (should (equal (agnostic-llm--model-split "opus") '("opus" ()))))
 
 (ert-deftest test-model-split-versioned ()
-  "A full name splits into family and up-to-two version integers."
+  "A full name splits into family and its version integers."
   (should (equal (agnostic-llm--model-split "claude-opus-4-8") '("opus" (4 8)))))
 
 (ert-deftest test-model-split-date-suffix ()
-  "A trailing date component is ignored when splitting."
+  "A trailing date component is ignored when splitting.
+The date drops for both two-integer versions (haiku-4-5) and
+single-integer ones (sonnet-5), where it must not be mistaken for a
+minor version."
   (should (equal (agnostic-llm--model-split "claude-haiku-4-5-20251001")
-                 '("haiku" (4 5)))))
+                 '("haiku" (4 5))))
+  (should (equal (agnostic-llm--model-split "claude-sonnet-5-20260301")
+                 '("sonnet" (5)))))
 
 (ert-deftest test-version< ()
   "Shorter version lists sort before longer ones sharing a prefix."
@@ -121,6 +126,15 @@
     (should (equal (agnostic-llm-effort-choices-for-model
                     "claude-haiku-4-5-20251001")
                    agnostic-llm-effort-choices))))
+
+(ert-deftest test-effort-date-suffix-single-integer-version ()
+  "A dated snapshot of a single-integer-version model keeps its efforts.
+The date must not be read as a minor version, else \"claude-sonnet-5-20260301\"
+would fail to match \"claude-sonnet-5\" and silently lose \"ultracode\"."
+  (let ((agnostic-llm-models test-agnostic-llm--models))
+    (should (member "ultracode"
+                    (agnostic-llm-effort-choices-for-model
+                     "claude-sonnet-5-20260301")))))
 
 (ert-deftest test-effort-nil-model-is-first-entry ()
   "Nil model resolves to the first table entry (offers `ultracode' here)."

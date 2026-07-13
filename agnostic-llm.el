@@ -26,6 +26,9 @@
 ;; Requires the `claude' CLI on PATH.  Binds no global keys itself — bind the
 ;; entry points (`agnostic-llm', `agnostic-llm-menu', `agnostic-llm-prompt',
 ;; ...) from your own configuration.
+;;
+;; `claude' is the first backend.  The roadmap for driving other agentic
+;; CLIs from the same UX lives in docs/multi-backend-design.org.
 
 ;;; Code:
 
@@ -123,17 +126,17 @@ vterm and to the inline bubble (captured once at bubble creation)."
 (defun agnostic-llm--model-split (model)
   "Split MODEL into (FAMILY NUMS), without resolving aliases.
 FAMILY is the family string (\"opus\", \"sonnet\", ...) or nil.  NUMS is
-the version as up to two integers (major minor); it is empty for a bare
-alias like \"opus\".  The optional `claude-' prefix and any trailing
-date component (e.g. in \"haiku-4-5-20251001\") are ignored."
+the version as a list of integers (major minor ...); it is empty for a
+bare alias like \"opus\".  The optional `claude-' prefix and any trailing
+date component (an eight-digit YYYYMMDD snapshot, such as the 20251001 in
+\"haiku-4-5-20251001\") are ignored."
   (let* ((name (string-remove-prefix "claude-" (or model "")))
          (parts (split-string name "-" t)))
     (list (car parts)
-          (seq-take
-           (cl-loop for p in (cdr parts)
-                    when (string-match-p "\\`[0-9]+\\'" p)
-                    collect (string-to-number p))
-           2))))
+          (cl-loop for p in (cdr parts)
+                   when (and (string-match-p "\\`[0-9]+\\'" p)
+                             (not (string-match-p "\\`[0-9]\\{8\\}\\'" p)))
+                   collect (string-to-number p)))))
 
 (defun agnostic-llm--version< (a b)
   "Non-nil when version list A precedes B (lexicographic on integers).
@@ -312,6 +315,23 @@ path component."
   (let ((root (agnostic-llm--project-root directory)))
     (cons (file-name-nondirectory (directory-file-name root))
           root)))
+
+(defconst agnostic-llm--session-buffer-prefix "*claude:"
+  "Prefix of the per-project agent session vterm buffer name.
+Claude is the first backend, so the visible prefix still reads `claude';
+`agnostic-llm--session-buffer-name' appends the project label and a
+closing `*'.  Once the backend abstraction in
+docs/multi-backend-design.org lands, the label comes from the active
+backend.")
+
+(defun agnostic-llm--session-buffer-name (label)
+  "Return the agent session vterm buffer name for project LABEL.
+Single source of truth for the `*claude:PROJECT*' buffer name, shared by
+`agnostic-llm', `agnostic-llm--bubble-promote', and
+`agnostic-llm-toggle-vterm-claude'.  The prefix comes from
+`agnostic-llm--session-buffer-prefix', which the active backend supplies
+once the backends in docs/multi-backend-design.org exist."
+  (format "%s%s*" agnostic-llm--session-buffer-prefix label))
 
 (defun agnostic-llm--claude-session-dir (dir)
   "Return the `~/.claude/projects/<encoded>' path for DIR.
@@ -504,7 +524,7 @@ With \\[universal-argument] \\[universal-argument]: new buffer, fresh session."
                           user-root)
                   (agnostic-llm--project-label default-directory)))
                (default-directory (or user-root root default-directory))
-               (base (format "*claude:%s*" label))
+               (base (agnostic-llm--session-buffer-name label))
                (prefix (prefix-numeric-value current-prefix-arg)))
     (cond ((= prefix 1)
            (let ((existing (get-buffer base)))
@@ -550,7 +570,8 @@ With prefix: always create a new vterm buffer."
 
 (defun agnostic-llm-buffer-p (&optional buf)
   "Return non-nil if BUF (default: current buffer) is a claude vterm buffer."
-  (string-prefix-p "*claude:" (buffer-name (or buf (current-buffer)))))
+  (string-prefix-p agnostic-llm--session-buffer-prefix
+                   (buffer-name (or buf (current-buffer)))))
 
 ;; Unregister dead buffers on re-eval.
 (when (hash-table-p agnostic-llm--buffers)
@@ -634,9 +655,10 @@ is a git repo."
     (agnostic-llm--ensure-ignored r)
     (with-temp-file file (insert prompt))))
 
-(defun agnostic-llm--send-to-claude (prompt &optional root)
-  "Switch to the claude vterm buffer and insert PROMPT.
-If ROOT is provided, switch to the claude buffer for that project root."
+(defun agnostic-llm--send-prompt (prompt &optional root)
+  "Save PROMPT, open the project's agent session, and send PROMPT to it.
+With ROOT, target the session for that project root instead of the
+current one."
   (agnostic-llm--save-prompt prompt root)
   (agnostic-llm root)
   (vterm-insert prompt)
@@ -857,7 +879,7 @@ all prior turns regardless of what else is happening in the directory."
   (let* ((root      agnostic-llm--prompt-project-root)
          (dir       (or root default-directory))
          (label     (car (agnostic-llm--project-label dir)))
-         (base      (format "*claude:%s*" label))
+         (base      (agnostic-llm--session-buffer-name label))
          (name      (generate-new-buffer-name base))
          (sid       agnostic-llm--bubble-session-id)
          (dangerous agnostic-llm--bubble-dangerous)
@@ -958,7 +980,7 @@ vterm session (queues if busy)."
            (full   (if ctx (concat ctx prompt) prompt)))
       (when (string-empty-p prompt) (user-error "Empty prompt"))
       (kill-buffer buf)
-      (agnostic-llm--send-to-claude full root))))
+      (agnostic-llm--send-prompt full root))))
 
 (defun agnostic-llm-prompt-cancel ()
   "Cancel the prompt or response.
@@ -1463,7 +1485,7 @@ Source-file comment is left untouched — remove it manually if desired."
                              (plist-get e :line)
                              (plist-get e :text)))
                    entries "\n")))
-      (agnostic-llm--send-to-claude
+      (agnostic-llm--send-prompt
        (format "Resolve the following %ss in this project:\n\n%s" kind prompt)))))
 
 ;; The per-kind annotation commands (add/list/send for FIXME and TODO) are
@@ -1527,9 +1549,10 @@ function)."
 
 (defun agnostic-llm--menu-effort ()
   "The effort selected in `agnostic-llm-menu', filtered by the current model.
-Returns nil when no effort is set, or when the set effort is gated to a
-model the current selection does not satisfy (e.g. \"ultracode\" with a
-non-opus-4.8 model), so an unsupported level is never passed to claude."
+Returns nil when no effort is set, or when the set effort is absent from
+the current model's `:efforts' in `agnostic-llm-models' (e.g. \"ultracode\"
+when the selected model does not offer it), so an unsupported level is
+never passed to claude."
   (let ((effort (agnostic-llm--menu-flag "--effort=")))
     (and effort
          (member effort (agnostic-llm-effort-choices-for-model (agnostic-llm--menu-current-model)))
@@ -1571,8 +1594,8 @@ Per-invocation overrides via the menu's `-m' switch are unaffected."
                              (or (agnostic-llm--project-root) default-directory))))
     (agnostic-llm-prompt-bubble)))
 
-(transient-define-suffix agnostic-llm--menu-open-claude ()
-  "Open the main *claude:PROJECT* vterm; honors the menu's switches."
+(transient-define-suffix agnostic-llm--menu-open-session ()
+  "Open the project's agent session vterm; honors the menu's switches."
   :description "Open Claude in project"
   (interactive)
   (let ((agnostic-llm-dangerously-skip-permissions
@@ -1603,7 +1626,7 @@ Per-invocation overrides via the menu's `-m' switch are unaffected."
     :choices (lambda ()
                (agnostic-llm-effort-choices-for-model (agnostic-llm--menu-current-model))))]
   [["Session"
-    ("c" agnostic-llm--menu-open-claude)
+    ("c" agnostic-llm--menu-open-session)
     ("v" "Vterm in project"       agnostic-llm-vterm-here)
     ("b" "Switch buffer"          agnostic-llm-switch-buffer)
     ("p" "Prompt"                 agnostic-llm-prompt)
@@ -1631,12 +1654,18 @@ Switches to the counterpart of the current buffer, creating it in the
 current window if missing.  When the current buffer is neither, jump
 to the project's vterm first (reusing or spawning)."
   (interactive)
-  (let ((name (buffer-name)))
-    (if (string-match "\\`\\*\\(vterm\\|claude\\):\\(.*\\)\\*\\'" name)
+  (let* ((name (buffer-name))
+         ;; Derive the session prefix's kind from the single source of
+         ;; truth so this predicate tracks `agnostic-llm--session-buffer-name'.
+         (session-kind (substring agnostic-llm--session-buffer-prefix 1 -1))
+         (re (format "\\`\\*\\(vterm\\|%s\\):\\(.*\\)\\*\\'"
+                     (regexp-quote session-kind))))
+    (if (string-match re name)
         (let* ((kind   (match-string 1 name))
                (label  (match-string 2 name))
-               (target (format (if (equal kind "vterm") "*claude:%s*" "*vterm:%s*")
-                               label))
+               (target (if (equal kind "vterm")
+                           (agnostic-llm--session-buffer-name label)
+                         (format "*vterm:%s*" label)))
                (existing (get-buffer target)))
           (if (buffer-live-p existing)
               (switch-to-buffer existing)

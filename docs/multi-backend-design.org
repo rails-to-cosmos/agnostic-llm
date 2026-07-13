@@ -1,0 +1,150 @@
+#+title: Multi-backend design
+#+options: toc:nil
+
+Back to [[file:index.org][Index]].
+
+* Goal
+
+Drive any agentic CLI (codex, gemini, opencode, aider, ...) from the
+same UX the package already gives =claude=: a per-project vterm session,
+the =@file=-completing prompt buffer, the inline "bubble" that streams a
+one-shot reply, the response viewer, and the FIXME/TODO annotations. The
+UI stays fixed; the backend supplies the argv, the on-disk session
+format, and the model catalog. =claude= is the first backend and the
+reference implementation for the abstraction below.
+
+* Current claude coupling
+
+Everything claude-specific in =agnostic-llm.el= today, with its role:
+
+- =agnostic-llm--claude-shell-command= — builds the interactive session
+  argv: =claude -c= when the directory has a recorded session (via
+  =agnostic-llm--claude-has-session-p=), else =claude=, plus =--model=,
+  =--effort=, and =--dangerously-skip-permissions=.
+- =agnostic-llm--bubble-command= — builds the one-shot =claude -p= argv
+  for the bubble, pinned to one conversation with =--session-id <UUID>=.
+- =agnostic-llm--bubble-promote= — hands a bubble off to a full vterm by
+  spawning =claude --resume <UUID>= on the same session id.
+- =agnostic-llm--claude-session-dir=, =agnostic-llm--claude-has-session-p=,
+  =agnostic-llm--session-file=, =agnostic-llm--session-records=,
+  =agnostic-llm--genuine-user-prompt-p=, =agnostic-llm--extract-last-response=
+  — the session store under =~/.claude/projects/<encoded>/*.jsonl= and
+  the last-assistant-turn extraction that =agnostic-llm-show-last-response=
+  renders. The directory encoding and the JSONL schema are claude's.
+- =agnostic-llm-models= plus =agnostic-llm-effort-choices-for-model= (and
+  the baseline =agnostic-llm-effort-choices=) — the claude model catalog
+  and its per-model =:efforts= vocabulary.
+- Buffer naming =*claude:PROJECT*= (the session vterm) and
+  =*claude-response:LABEL*= (the response viewer). The session name is
+  now built through =agnostic-llm--session-buffer-name= over the constant
+  =agnostic-llm--session-buffer-prefix=; the response name is still built
+  inline in =agnostic-llm-show-last-response=.
+- =agnostic-llm-bubble-prompt-prefix= — the =/btw= slash-command
+  convention prepended to bubble prompts, matching a claude custom
+  command at =~/.claude/commands/btw.md=.
+- Environment scrubbing in =agnostic-llm--bubble-spawn-turn=: it binds
+  =NO_COLOR=1=, =CLICOLOR=0=, =TERM=dumb= around the =claude -p=
+  subprocess so the captured stream stays plain.
+
+* Backend abstraction
+
+Model a backend as a =cl-defstruct=. Prefer a struct over a plist:
+named accessors, a fixed field set the byte-compiler checks, and a
+generated =agnostic-llm-backend-p= predicate, all of which a plist lacks.
+
+#+begin_src emacs-lisp
+(cl-defstruct agnostic-llm-backend
+  name              ; symbol, e.g. `claude'
+  executable        ; string, e.g. "claude"
+  session-command   ; (ROOT OPTS) -> vterm shell command string
+  oneshot-command   ; (PROMPT OPTS) -> argv list, or nil (no print mode)
+  last-response     ; (DIR) -> newest assistant reply text, or nil
+  models            ; alist shaped like `agnostic-llm-models'
+  capabilities      ; list of capability symbols
+  buffer-label)     ; string for `*LABEL:project*' names; defaults to name
+#+end_src
+
+Field contracts:
+
+- =session-command= — called with =(ROOT OPTS)=; returns the string handed
+  to =vterm-shell=. OPTS is a plist: =:model :effort :dangerous :continue
+  :resume-id=. Replaces =agnostic-llm--claude-shell-command= and the
+  =claude --resume= construction inside =agnostic-llm--bubble-promote=.
+  Session detection stays inside the backend: =:continue= carries the
+  caller's intent (continue an existing session vs. start fresh), and
+  the backend resolves it against its own store — the claude backend
+  keeps =agnostic-llm--claude-has-session-p= and emits =claude -c= only
+  when a recorded session exists.
+- =oneshot-command= — called with =(PROMPT OPTS)=; returns the argv list
+  for the bubble subprocess, or nil when the backend has no print mode.
+  Replaces =agnostic-llm--bubble-command=.
+- =last-response= — called with =(DIR)=; returns the newest assistant
+  reply text, or nil when the backend keeps no readable session log.
+  Wraps =agnostic-llm--session-file=, =agnostic-llm--session-records=,
+  =agnostic-llm--genuine-user-prompt-p=, and
+  =agnostic-llm--extract-last-response=.
+- =models= — a per-backend table in the shape of =agnostic-llm-models=
+  (=(NAME . PLIST)= with =:efforts=). The effort vocabulary is
+  backend-defined; the menu reads it through the active backend.
+- =capabilities= — a list drawn from: =session-id=, =resume=, =continue=,
+  =oneshot=, =effort=, =dangerous=. The UI degrades per capability. The
+  bubble's promote action requires =session-id= and =resume=; the =-e=
+  effort switch hides without =effort=; the =-d= switch hides without
+  =dangerous=; the bubble command is offered only with =oneshot=.
+- =buffer-label= — the string placed in =*LABEL:project*= buffer names,
+  defaulting to =name=. Feeds =agnostic-llm--session-buffer-name=.
+
+Registry: an alist =agnostic-llm-backends= keyed by name, and a defcustom
+=agnostic-llm-backend= naming the active one (default =claude=). A helper
+=agnostic-llm--backend= resolves the current struct; a later transient
+switch selects it per invocation.
+
+* Mapping table
+
+| Existing symbol                            | Becomes                                        |
+|--------------------------------------------+------------------------------------------------|
+| =agnostic-llm--claude-shell-command=       | =session-command= (=:continue= case)           |
+| =agnostic-llm--claude-has-session-p=       | =session-command= (continue detection)         |
+| =claude --resume= in =...--bubble-promote= | =session-command= (=:resume-id= case)          |
+| =agnostic-llm--bubble-command=             | =oneshot-command=                              |
+| =agnostic-llm--extract-last-response=      | =last-response=                                |
+| =agnostic-llm--genuine-user-prompt-p=      | =last-response=                                |
+| =agnostic-llm--session-file=               | =last-response=                                |
+| =agnostic-llm--session-records=            | =last-response=                                |
+| =agnostic-llm-models=                      | =models=                                       |
+| =agnostic-llm-effort-choices-for-model=    | reads the active backend's =models= =:efforts= |
+| =agnostic-llm--session-buffer-prefix=      | =buffer-label=                                 |
+| =agnostic-llm--session-buffer-name=        | =buffer-label=                                 |
+| =--session-id= / =--resume= pinning        | =capabilities= (=session-id=, =resume=)        |
+| =-e= effort / =-d= dangerous switches      | =capabilities= (=effort=, =dangerous=)         |
+
+* Migration plan
+
+Each phase is independently shippable and leaves =make all= green.
+
+1. (this change) Neutral names in the generic layer: =agnostic-llm--send-prompt=
+   and =agnostic-llm--menu-open-session=; session-buffer-name construction
+   centralized behind =agnostic-llm--session-buffer-name= and
+   =agnostic-llm--session-buffer-prefix=. Strictly-claude symbols keep the
+   =claude= name.
+2. Introduce the =agnostic-llm-backend= struct and the =agnostic-llm-backends=
+   registry; port claude verbatim as the first backend; route the call
+   sites through =agnostic-llm--backend=.
+3. Move =agnostic-llm-models= into the claude backend's =models= field;
+   route the menu's =-m= and =-e= switches through the active backend.
+4. Add a second backend (codex or gemini as the proof) under the
+   =oneshot=-capability degradation rules, so a backend with no print
+   mode simply omits the bubble.
+5. Per-project backend default plus a transient backend switch.
+
+* Open questions
+
+- Session persistence formats differ per CLI. =last-response= may stay
+  claude-only for a while; backends without a readable log return nil and
+  the viewer degrades.
+- Effort flag names and vocabularies differ across CLIs; the =:efforts=
+  table and the flag name both belong to the backend.
+- The =--dangerously-skip-permissions= equivalent differs per CLI (or is
+  absent); gate it behind the =dangerous= capability.
+- Prompt-prefix conventions (=/btw=) are claude-specific; each backend
+  supplies its own default, or none.

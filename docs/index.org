@@ -1,0 +1,12 @@
+#+title: agnostic-llm documentation
+#+options: toc:nil
+
+Wiki index for the =agnostic-llm= package. Documents cross-link each
+other; start here and follow the links.
+
+* Documents
+
+- [[file:multi-backend-design.org][Multi-backend design]] — how to drive any agentic CLI
+  (codex, gemini, opencode, aider, ...) from the same UX. =claude= is
+  the first backend; this note proposes the backend abstraction and a
+  phased migration toward it.
