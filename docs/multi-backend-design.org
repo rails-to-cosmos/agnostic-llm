@@ -31,9 +31,10 @@ Everything claude-specific in =agnostic-llm.el= today, with its role:
   — the session store under =~/.claude/projects/<encoded>/*.jsonl= and
   the last-assistant-turn extraction that =agnostic-llm-show-last-response=
   renders. The directory encoding and the JSONL schema are claude's.
-- =agnostic-llm-models= plus =agnostic-llm-effort-choices-for-model= (and
-  the baseline =agnostic-llm-effort-choices=) — the claude model catalog
-  and its per-model =:efforts= vocabulary.
+- =agnostic-llm-models= plus =agnostic-llm-effort-choices-for-model= — the
+  claude model catalog and its per-model =:efforts= vocabulary. Every
+  entry declares its own =:efforts=; there is no fallback, so a lookup for
+  an unknown model or an entry without the key returns nil.
 - Buffer naming =*claude:PROJECT*= (the session vterm) and
   =*claude-response:LABEL*= (the response viewer). The session name is
   now built through =agnostic-llm--session-buffer-name= over the constant

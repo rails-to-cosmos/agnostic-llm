@@ -128,7 +128,8 @@ and `-b` (`/btw` prefix) switches apply to the launched command.
 
 ;; Teach the package about new models and their effort levels as they
 ;; ship. Entries are newest-first; the first stands in for claude's
-;; default. Omit :efforts to inherit the baseline agnostic-llm-effort-choices.
+;; default. Every entry must declare its own :efforts; there is no
+;; fallback, so an entry without it offers no effort choices.
 (add-to-list 'agnostic-llm-models
              '("claude-opus-5" :efforts ("default" "low" "medium" "high" "max" "ultracode")))
 

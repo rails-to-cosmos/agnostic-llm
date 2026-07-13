@@ -70,21 +70,20 @@ tool-use confirmation prompts."
   :group 'agnostic-llm)
 
 (defcustom agnostic-llm-models
-  '(("claude-fable-5"   . (:efforts ("default" "low" "medium" "high" "max" "ultracode")))
-    ("claude-sonnet-5"  . (:efforts ("default" "low" "medium" "high" "max" "ultracode")))
-    ("claude-opus-4-8"  . (:efforts ("default" "low" "medium" "high" "max" "ultracode")))
-    ("claude-opus-4-7")
-    ("claude-opus-4-6")
-    ("claude-sonnet-4-6")
-    ("claude-haiku-4-5"))
+  '(("claude-fable-5"    . (:efforts ("default" "low" "medium" "high" "max" "ultracode")))
+    ("claude-sonnet-5"   . (:efforts ("default" "low" "medium" "high" "max" "ultracode")))
+    ("claude-opus-4-8"   . (:efforts ("default" "low" "medium" "high" "max" "ultracode")))
+    ("claude-opus-4-7"   . (:efforts ("default" "low" "medium" "high" "max")))
+    ("claude-opus-4-6"   . (:efforts ("default" "low" "medium" "high" "max")))
+    ("claude-sonnet-4-6" . (:efforts ("default" "low" "medium" "high" "max")))
+    ("claude-haiku-4-5"  . (:efforts ("default" "low" "medium" "high" "max"))))
   "Claude models known to `agnostic-llm-menu', newest first.
 Each entry is (NAME . PLIST).  NAME is a full model name; the CLI also
-accepts aliases like \"opus\", \"sonnet\", \"haiku\".  PLIST currently
-supports one key, `:efforts' — the full list of reasoning-effort levels
-that model offers.  When absent, the model uses the baseline
-`agnostic-llm-effort-choices'.  A full override (rather than an extras
-list) lets a model also lack a baseline level.  Remaining plist keys are
-reserved for future per-model properties.
+accepts aliases like \"opus\", \"sonnet\", \"haiku\".  PLIST supports one
+key, `:efforts' — the full list of reasoning-effort levels that model
+offers.  Every entry must declare its own `:efforts'; there is no
+fallback, so a model that omits the key offers no effort choices.
+Remaining plist keys are reserved for future per-model properties.
 
 Order matters: entries are newest-first, and the first entry stands in
 for claude's own default model (used when `agnostic-llm-model' is nil).
@@ -176,24 +175,13 @@ ordered by `agnostic-llm--version<'."
 
 ;;; Reasoning effort
 
-(defconst agnostic-llm-effort-choices
-  '("default"
-    "low"
-    "medium"
-    "high"
-    "max")
-  "Baseline reasoning-effort levels offered for every model.
-A model may widen or narrow this set through its `:efforts' entry in
-`agnostic-llm-models'; `agnostic-llm-effort-choices-for-model' returns the
-levels actually offered for a given model.")
-
 (defun agnostic-llm-effort-choices-for-model (model)
   "Return the reasoning-effort levels offered for MODEL.
-Uses the `:efforts' list from MODEL's `agnostic-llm-models' entry, falling
-back to the baseline `agnostic-llm-effort-choices' when MODEL is unknown
-or declares no efforts."
-  (or (plist-get (cdr (agnostic-llm--model-spec model)) :efforts)
-      agnostic-llm-effort-choices))
+The `:efforts' list from MODEL's `agnostic-llm-models' entry, or nil when
+MODEL is unknown or its entry declares no efforts.  With nil the menu's
+`-e' switch offers no choices and `agnostic-llm--menu-effort' passes no
+effort to claude."
+  (plist-get (cdr (agnostic-llm--model-spec model)) :efforts))
 
 (defcustom agnostic-llm-effort nil
   "Reasoning effort passed to claude as `--effort'.

@@ -64,11 +64,12 @@
   '(("claude-fable-5"   . (:efforts ("default" "low" "medium" "high" "max" "ultracode")))
     ("claude-sonnet-5"  . (:efforts ("default" "low" "medium" "high" "max" "ultracode")))
     ("claude-opus-4-8"  . (:efforts ("default" "low" "medium" "high" "max" "ultracode")))
-    ("claude-opus-4-7")
-    ("claude-opus-4-6")
-    ("claude-sonnet-4-6")
-    ("claude-haiku-4-5"))
-  "Fixture table mirroring the shipped `agnostic-llm-models' default.")
+    ("claude-opus-4-7"  . (:efforts ("default" "low" "medium" "high" "max")))
+    ("claude-opus-4-6"  . (:efforts ("default" "low" "medium" "high" "max")))
+    ("claude-sonnet-4-6" . (:efforts ("default" "low" "medium" "high" "max")))
+    ("claude-haiku-4-5" . (:efforts ("default" "low" "medium" "high" "max"))))
+  "Fixture table mirroring the shipped `agnostic-llm-models' default.
+Every entry declares its own `:efforts'; there is no fallback.")
 
 (ert-deftest test-model-split-alias ()
   "A bare alias splits to (FAMILY ()) with no version."
@@ -101,12 +102,12 @@ minor version."
     (should (member "ultracode"
                     (agnostic-llm-effort-choices-for-model "claude-opus-4-8")))))
 
-(ert-deftest test-effort-per-model-gap ()
-  "A model with no `:efforts' falls back to baseline, without `ultracode'."
+(ert-deftest test-effort-per-model-explicit ()
+  "A model returns its own declared efforts; a non-ultracode model omits it."
   (let ((agnostic-llm-models test-agnostic-llm--models))
     (let ((choices (agnostic-llm-effort-choices-for-model "claude-opus-4-6")))
       (should-not (member "ultracode" choices))
-      (should (equal choices agnostic-llm-effort-choices)))))
+      (should (equal choices '("default" "low" "medium" "high" "max"))))))
 
 (ert-deftest test-effort-bare-alias-newest ()
   "A bare alias resolves to the newest family entry (here, with `ultracode')."
@@ -114,18 +115,18 @@ minor version."
     (should (member "ultracode"
                     (agnostic-llm-effort-choices-for-model "opus")))))
 
-(ert-deftest test-effort-bare-alias-lower-versions-baseline ()
-  "A bare alias whose family lacks declared efforts yields baseline only."
+(ert-deftest test-effort-bare-alias-lower-versions-explicit ()
+  "A bare alias resolves to its family's newest entry and its declared efforts."
   (let ((agnostic-llm-models test-agnostic-llm--models))
     (should (equal (agnostic-llm-effort-choices-for-model "haiku")
-                   agnostic-llm-effort-choices))))
+                   '("default" "low" "medium" "high" "max")))))
 
 (ert-deftest test-effort-date-suffix-resolves ()
-  "A date-suffixed id resolves to its base entry (here, baseline efforts)."
+  "A date-suffixed id resolves to its base entry and its declared efforts."
   (let ((agnostic-llm-models test-agnostic-llm--models))
     (should (equal (agnostic-llm-effort-choices-for-model
                     "claude-haiku-4-5-20251001")
-                   agnostic-llm-effort-choices))))
+                   '("default" "low" "medium" "high" "max")))))
 
 (ert-deftest test-effort-date-suffix-single-integer-version ()
   "A dated snapshot of a single-integer-version model keeps its efforts.
@@ -142,11 +143,15 @@ would fail to match \"claude-sonnet-5\" and silently lose \"ultracode\"."
     (should (member "ultracode"
                     (agnostic-llm-effort-choices-for-model nil)))))
 
-(ert-deftest test-effort-unknown-model-baseline ()
-  "An unknown model falls back to baseline efforts."
+(ert-deftest test-effort-unknown-model-nil ()
+  "An unknown model has no declared efforts, so lookup returns nil."
   (let ((agnostic-llm-models test-agnostic-llm--models))
-    (should (equal (agnostic-llm-effort-choices-for-model "claude-mystery-9")
-                   agnostic-llm-effort-choices))))
+    (should-not (agnostic-llm-effort-choices-for-model "claude-mystery-9"))))
+
+(ert-deftest test-effort-entry-without-efforts-nil ()
+  "A known entry that declares no `:efforts' yields nil; there is no fallback."
+  (let ((agnostic-llm-models '(("claude-bare-1"))))
+    (should-not (agnostic-llm-effort-choices-for-model "claude-bare-1"))))
 
 (ert-deftest test-model-choices-order ()
   "`agnostic-llm-model-choices' returns the table names in order."
