@@ -27,6 +27,24 @@
               (should (equal (agnostic-llm--project-root) (file-name-as-directory dir))))))
       (delete-directory dir t))))
 
+(ert-deftest test-project-root-honors-override ()
+  "A buffer-local `agnostic-llm--root-override' wins over marker search.
+Even with a .git ancestor, the pinned directory is returned verbatim so a
+session keeps its persistence anchored to the directory it launched in."
+  (let ((dir (make-temp-file "agnostic-llm-test-" t)))
+    (unwind-protect
+        (progn
+          (make-directory (expand-file-name ".git" dir))
+          (let ((sub (expand-file-name "src/deep/" dir)))
+            (make-directory sub t)
+            (with-temp-buffer
+              (setq-local agnostic-llm--root-override sub)
+              ;; default-directory is the git root; the override must still win.
+              (let ((default-directory dir))
+                (should (equal (agnostic-llm--project-root)
+                               (file-name-as-directory (expand-file-name sub))))))))
+      (delete-directory dir t))))
+
 ;; ---------------------------------------------------------------------------
 ;; agnostic-llm--write-context-file
 ;; ---------------------------------------------------------------------------
