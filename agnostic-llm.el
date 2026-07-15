@@ -3,7 +3,7 @@
 ;; Copyright (c) 2026 Dmitry Akatov
 ;; Author: Dmitry Akatov <dmitry.akatov@protonmail.com>
 ;; URL: https://github.com/rails-to-cosmos/agnostic-llm
-;; Package-Version: 0.2.0.0.20260714.0
+;; Package-Version: 0.3.0.0.20260715.0
 ;; Package-Requires: ((emacs "28.1") (transient "0.4.0") (vterm "0.0.2"))
 ;; Keywords: convenience, tools
 
@@ -508,20 +508,22 @@ the top."
                               (inhibit-same-window . t)))))))
 
 ;;;###autoload
-(defun agnostic-llm (&optional user-root)
+(defun agnostic-llm (&optional user-root label)
   "Open Claude CLI in a vterm buffer named *llm:project*.
 With non-nil USER-ROOT, target that directory instead of the current
-project.
+project.  With non-nil LABEL, name the buffer *llm:LABEL* instead of
+deriving the label from the project directory's final path component.
 Without prefix: reuse the existing buffer, or create one.
 With \\[universal-argument]: new buffer, continue session if possible.
 With \\[universal-argument] \\[universal-argument]: new buffer, fresh session."
   (interactive)
-  (pcase-let* ((`(,label . ,root)
+  (pcase-let* ((`(,derived . ,root)
                 (if user-root
                     (cons (file-name-nondirectory
                            (directory-file-name (expand-file-name user-root)))
                           user-root)
                   (agnostic-llm--project-label default-directory)))
+               (label (or label derived))
                (default-directory (or user-root root default-directory))
                (base (agnostic-llm--session-buffer-name label))
                (prefix (prefix-numeric-value current-prefix-arg)))
