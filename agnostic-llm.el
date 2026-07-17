@@ -3,7 +3,7 @@
 ;; Copyright (c) 2026 Dmitry Akatov
 ;; Author: Dmitry Akatov <dmitry.akatov@protonmail.com>
 ;; URL: https://github.com/rails-to-cosmos/agnostic-llm
-;; Package-Version: 0.3.0.0.20260715.0
+;; Package-Version: 0.4.0.0.20260717.0
 ;; Package-Requires: ((emacs "28.1") (transient "0.4.0") (vterm "0.0.2"))
 ;; Keywords: convenience, tools
 
@@ -1595,22 +1595,26 @@ Per-invocation overrides via the menu's `-m' switch are unaffected."
         (agnostic-llm-dangerously-skip-permissions
          (or agnostic-llm-dangerously-skip-permissions (agnostic-llm--menu-dangerous-p)))
         (agnostic-llm-model (or (agnostic-llm--menu-flag "--model=") agnostic-llm-model))
-        (default-directory (if (agnostic-llm--menu-use-cwd-p)
-                               default-directory
-                             (or (agnostic-llm--project-root) default-directory))))
+        (default-directory (or (plist-get (transient-scope) :root)
+                               (if (agnostic-llm--menu-use-cwd-p)
+                                   default-directory
+                                 (or (agnostic-llm--project-root) default-directory)))))
     (agnostic-llm-prompt-bubble)))
 
 (transient-define-suffix agnostic-llm--menu-open-session ()
   "Open the project's agent session vterm; honors the menu's switches."
   :description "Open Claude in project"
   (interactive)
-  (let ((agnostic-llm-dangerously-skip-permissions
-         (or agnostic-llm-dangerously-skip-permissions (agnostic-llm--menu-dangerous-p)))
-        (agnostic-llm-model (or (agnostic-llm--menu-flag "--model=") agnostic-llm-model))
-        (agnostic-llm-effort (or (agnostic-llm--menu-effort) agnostic-llm-effort))
-        (root (when (agnostic-llm--menu-use-cwd-p) default-directory))
-        (current-prefix-arg nil))
-    (agnostic-llm root)))
+  (let* ((scope (transient-scope))
+         (agnostic-llm-dangerously-skip-permissions
+          (or agnostic-llm-dangerously-skip-permissions (agnostic-llm--menu-dangerous-p)))
+         (agnostic-llm-model (or (agnostic-llm--menu-flag "--model=") agnostic-llm-model))
+         (agnostic-llm-effort (or (agnostic-llm--menu-effort) agnostic-llm-effort))
+         (root (or (plist-get scope :root)
+                   (when (agnostic-llm--menu-use-cwd-p) default-directory)))
+         (label (plist-get scope :label))
+         (current-prefix-arg nil))
+    (agnostic-llm root label)))
 
 (defun agnostic-llm--menu-model-description ()
   "Description for the model switch showing the current default."
@@ -1620,9 +1624,29 @@ Per-invocation overrides via the menu's `-m' switch are unaffected."
   "Description for the effort switch showing the current default."
   (format "Effort [%s]" (or agnostic-llm-effort "default")))
 
-(transient-define-prefix agnostic-llm-menu ()
-  "Claude CLI commands."
-  ["Options"
+(defun agnostic-llm--menu-header ()
+  "Options group title; highlights a pinned session override when one is set.
+The override -- directory ROOT and buffer LABEL passed to `agnostic-llm-menu' --
+lives in the transient scope; `agnostic-llm--menu-open-session' honors it."
+  (let ((root  (plist-get (transient-scope) :root))
+        (label (plist-get (transient-scope) :label)))
+    (if (or root label)
+        (concat (propertize "Session override →" 'face 'transient-heading)
+                (when root  (concat " dir="
+                                    (propertize (abbreviate-file-name (directory-file-name root))
+                                                'face 'transient-value)))
+                (when label (concat " buffer="
+                                    (propertize (agnostic-llm--session-buffer-name label)
+                                                'face 'transient-value))))
+      "Options")))
+
+;;;###autoload
+(transient-define-prefix agnostic-llm-menu (&optional root label)
+  "Claude CLI commands.
+ROOT and LABEL, when supplied (e.g. by an integration such as org-glance), pin
+the session to that directory and buffer name instead of deriving them from the
+current project; the header highlights the override."
+  [:description agnostic-llm--menu-header
    ("-b" "Prepend /btw slash-command to inline prompts" "--btw")
    ("-c" "Use current directory (not project root)"     "-c")
    ("-d" "Dangerously skip permission prompts"          "--dangerously-skip-permissions")
@@ -1651,7 +1675,9 @@ Per-invocation overrides via the menu's `-m' switch are unaffected."
     ("D" "Send TODOs"         agnostic-llm-send-todos)
     ("G" "Grep annotations"   agnostic-llm-grep-annotations)]
    ["Highlights"
-    ("h" "Clear revert highlights" agnostic-llm-change-highlight-clear)]])
+    ("h" "Clear revert highlights" agnostic-llm-change-highlight-clear)]]
+  (interactive)
+  (transient-setup 'agnostic-llm-menu nil nil :scope (list :root root :label label)))
 
 ;;;###autoload
 (defun agnostic-llm-toggle-vterm-session ()
