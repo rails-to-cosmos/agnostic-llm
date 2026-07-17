@@ -3,32 +3,36 @@
 ;; Copyright (c) 2026 Dmitry Akatov
 ;; Author: Dmitry Akatov <dmitry.akatov@protonmail.com>
 ;; URL: https://github.com/rails-to-cosmos/agnostic-llm
-;; Package-Version: 0.4.0.0.20260717.0
+;; Package-Version: 0.5.0.0.20260717.0
 ;; Package-Requires: ((emacs "28.1") (transient "0.4.0") (vterm "0.0.2"))
 ;; Keywords: convenience, tools
 
 ;;; Commentary:
 ;;
-;; Drive the `claude' CLI (https://docs.anthropic.com/en/docs/claude-cli)
-;; from Emacs.  Each project gets a dedicated `*llm:PROJECT*' vterm; a
-;; multi-line prompt buffer with @file completion feeds it, and a throwaway
-;; "bubble" streams a `claude -p' reply inline without disturbing the main
-;; session.  `agnostic-llm-show-last-response' renders the latest assistant
-;; turn from the session JSONL into a read-only buffer.
+;; Drive an agentic CLI from Emacs.  Each project gets a dedicated
+;; `*llm:PROJECT*' vterm; a multi-line prompt buffer with @file completion
+;; feeds it, and a throwaway "bubble" streams a one-shot reply inline
+;; without disturbing the main session.  `agnostic-llm-show-last-response'
+;; renders the latest assistant turn from the session JSONL into a read-only
+;; buffer.
 ;;
 ;; A transient menu (`agnostic-llm-menu') gathers the commands and exposes
-;; per-invocation switches for model, reasoning effort, and
-;; `--dangerously-skip-permissions'.  A FIXME/TODO annotation system records
-;; notes at point, persists them (per-project under `.agnostic-llm/' or
-;; per-user under `~/.cache/agnostic-llm/'), lists them, and can hand them
-;; back to Claude to resolve.
+;; per-invocation switches for model, reasoning effort, and skipping
+;; permission prompts.  A FIXME/TODO annotation system records notes at
+;; point, persists them (per-project under `.agnostic-llm/' or per-user
+;; under `~/.cache/agnostic-llm/'), lists them, and can hand them back to
+;; the LLM to resolve.
 ;;
-;; Requires the `claude' CLI on PATH.  Binds no global keys itself — bind the
-;; entry points (`agnostic-llm', `agnostic-llm-menu', `agnostic-llm-prompt',
-;; ...) from your own configuration.
+;; Everything provider-specific — the CLI executable, its command-line
+;; flags, the session-store layout, and the model/effort catalog — lives in
+;; `agnostic-llm-providers', keyed by `agnostic-llm-provider'.  `claude' is
+;; the default provider; add entries to drive other agentic CLIs (see
+;; docs/multi-backend-design.org).
 ;;
-;; `claude' is the first backend.  The roadmap for driving other agentic
-;; CLIs from the same UX lives in docs/multi-backend-design.org.
+;; Requires the active provider's CLI on PATH (the `claude' CLI by default).
+;; Binds no global keys itself — bind the entry points (`agnostic-llm',
+;; `agnostic-llm-menu', `agnostic-llm-prompt', ...) from your own
+;; configuration.
 
 ;;; Code:
 
@@ -47,9 +51,86 @@
 ;;; Customization
 
 (defgroup agnostic-llm nil
-  "Claude CLI integration for Emacs."
+  "Agentic CLI integration for Emacs."
   :group 'tools
   :prefix "agnostic-llm-")
+
+;;; Provider
+;;
+;; Each agentic CLI's executable, flags, session-store layout, and model
+;; catalog live in a provider plist.  `agnostic-llm-providers' is the
+;; registry, `agnostic-llm-provider' selects the active entry, and generic
+;; code reads fields via `agnostic-llm--provider-get' — never a literal CLI
+;; name.
+
+(defcustom agnostic-llm-provider 'claude
+  "Symbol selecting the active entry in `agnostic-llm-providers'.
+Default `claude' drives the Claude CLI."
+  :type 'symbol
+  :group 'agnostic-llm)
+
+(defcustom agnostic-llm-providers
+  '((claude
+     :executable          "claude"
+     :continue-flag       "-c"
+     :print-flag          "-p"
+     :model-flag          "--model"
+     :effort-flag         "--effort"
+     :session-id-flag     "--session-id"
+     :resume-flag         "--resume"
+     :dangerous-flag      "--dangerously-skip-permissions"
+     :session-dir         "~/.claude/projects/"
+     :session-file-regexp "\\.jsonl\\'"
+     :model-prefix        "claude-"
+     :models
+     (("claude-fable-5"    . (:efforts ("default" "low" "medium" "high" "max" "ultracode")))
+      ("claude-sonnet-5"   . (:efforts ("default" "low" "medium" "high" "max" "ultracode")))
+      ("claude-opus-4-8"   . (:efforts ("default" "low" "medium" "high" "max" "ultracode")))
+      ("claude-opus-4-7"   . (:efforts ("default" "low" "medium" "high" "max")))
+      ("claude-opus-4-6"   . (:efforts ("default" "low" "medium" "high" "max")))
+      ("claude-sonnet-4-6" . (:efforts ("default" "low" "medium" "high" "max")))
+      ("claude-haiku-4-5"  . (:efforts ("default" "low" "medium" "high" "max"))))))
+  "Registry of agentic-CLI providers, keyed by symbol.
+Each entry is (SYMBOL . PLIST); `agnostic-llm-provider' names the active
+one.  PLIST fields:
+
+  :executable          program run for the session vterm and bubble.
+  :continue-flag       continue the most recent session.
+  :print-flag          one-shot, non-interactive prompt.
+  :model-flag          name the model (value follows).
+  :effort-flag         name the reasoning effort (value follows).
+  :session-id-flag     pin a stable session id (bubble turns).
+  :resume-flag         resume a session by id.
+  :dangerous-flag      skip tool-use permission prompts.
+  :session-dir         session-store root; the project directory encodes
+                       into one component under it.
+  :session-file-regexp matches a session transcript there (newest by
+                       mtime is live).
+  :model-prefix        vendor prefix stripped before family/version
+                       parsing (e.g. \"claude-\").
+  :models              catalog as (NAME . PLIST); each `:efforts' lists a
+                       model's effort levels.  Newest-first; the first is
+                       the CLI default.
+
+Add an entry and point `agnostic-llm-provider' at it to drive another CLI.
+See docs/multi-backend-design.org."
+  :type '(alist :key-type symbol :value-type sexp)
+  :group 'agnostic-llm)
+
+(defun agnostic-llm--provider ()
+  "Return the plist describing the active provider.
+Signals an error when `agnostic-llm-provider' names no entry in
+`agnostic-llm-providers'."
+  (or (alist-get agnostic-llm-provider agnostic-llm-providers)
+      (error "Unknown `agnostic-llm-provider': %s" agnostic-llm-provider)))
+
+(defun agnostic-llm--provider-get (key)
+  "Return KEY from the active provider's plist (see `agnostic-llm--provider')."
+  (plist-get (agnostic-llm--provider) key))
+
+(defun agnostic-llm--models ()
+  "Return the active provider's model catalog (its `:models' alist)."
+  (agnostic-llm--provider-get :models))
 
 ;;; Project Root Detection
 
@@ -59,77 +140,53 @@
   :group 'agnostic-llm)
 
 (defcustom agnostic-llm-dangerously-skip-permissions nil
-  "When non-nil, pass `--dangerously-skip-permissions' to claude.
+  "When non-nil, pass the provider's `:dangerous-flag' to the CLI.
 Applies to the main `*llm:PROJECT*' vterm and to the inline
 bubble (captured once at bubble creation as buffer-local state).
 
 Normally toggled per-invocation via the `-d' switch in `agnostic-llm-menu'
-rather than set directly.  Beware: with this flag Claude skips all
+rather than set directly.  Beware: with this flag the CLI skips all
 tool-use confirmation prompts."
   :type 'boolean
   :group 'agnostic-llm)
 
-(defcustom agnostic-llm-models
-  '(("claude-fable-5"    . (:efforts ("default" "low" "medium" "high" "max" "ultracode")))
-    ("claude-sonnet-5"   . (:efforts ("default" "low" "medium" "high" "max" "ultracode")))
-    ("claude-opus-4-8"   . (:efforts ("default" "low" "medium" "high" "max" "ultracode")))
-    ("claude-opus-4-7"   . (:efforts ("default" "low" "medium" "high" "max")))
-    ("claude-opus-4-6"   . (:efforts ("default" "low" "medium" "high" "max")))
-    ("claude-sonnet-4-6" . (:efforts ("default" "low" "medium" "high" "max")))
-    ("claude-haiku-4-5"  . (:efforts ("default" "low" "medium" "high" "max"))))
-  "Claude models known to `agnostic-llm-menu', newest first.
-Each entry is (NAME . PLIST).  NAME is a full model name; the CLI also
-accepts aliases like \"opus\", \"sonnet\", \"haiku\".  PLIST supports one
-key, `:efforts' — the full list of reasoning-effort levels that model
-offers.  Every entry must declare its own `:efforts'; there is no
-fallback, so a model that omits the key offers no effort choices.
-Remaining plist keys are reserved for future per-model properties.
-
-Order matters: entries are newest-first, and the first entry stands in
-for claude's own default model (used when `agnostic-llm-model' is nil).
-
-This is the place to teach the package about new models and their
-effort levels as they ship."
-  :type '(alist :key-type (string :tag "Model")
-                :value-type (plist :options ((:efforts (repeat string)))))
-  :group 'agnostic-llm)
-
 (defun agnostic-llm-model-choices ()
   "Return the model names offered by `agnostic-llm-menu' under the `-m' switch.
-The names come from `agnostic-llm-models', in table order."
-  (mapcar #'car agnostic-llm-models))
+The names come from the active provider's model catalog, in table order."
+  (mapcar #'car (agnostic-llm--models)))
 
 (defcustom agnostic-llm-model nil
-  "Model passed to claude as `--model'.
-Nil means use claude's default (whatever its config picks).  A string
-is passed through verbatim — full names like \"claude-opus-4-7\" or
-aliases like \"opus\" both work.
+  "Model name passed to the active provider (via its `:model-flag').
+Nil means use the CLI's own default (whatever its config picks).  A
+string is passed through verbatim — full names like \"claude-opus-4-7\"
+or aliases like \"opus\" both work with the claude provider.
 
 Normally toggled per-invocation via the `-m' switch in `agnostic-llm-menu'
 rather than set directly.  Applies to the main `*llm:PROJECT*'
 vterm and to the inline bubble (captured once at bubble creation)."
-  :type '(choice (const :tag "Default (claude picks)" nil)
+  :type '(choice (const :tag "Default (CLI picks)" nil)
                  (string :tag "Model name"))
   :group 'agnostic-llm)
 
-;;; Model resolution (name -> `agnostic-llm-models' entry)
+;;; Model resolution (name -> provider `:models' entry)
 ;;
 ;; A model name may be a full id ("claude-opus-4-8"), a date-suffixed id
 ;; ("claude-haiku-4-5-20251001"), or a bare family alias ("opus").
 ;; `agnostic-llm--model-split' breaks a name into (FAMILY NUMS), and
 ;; `agnostic-llm--version<' orders version lists so a bare alias resolves
 ;; to its family's newest entry.  `agnostic-llm--model-spec' ties these
-;; together, returning the declarative `agnostic-llm-models' entry that
+;; together, returning the declarative provider `:models' entry that
 ;; governs a model's effort levels.
 
 (defun agnostic-llm--model-split (model)
   "Split MODEL into (FAMILY NUMS), without resolving aliases.
 FAMILY is the family string (\"opus\", \"sonnet\", ...) or nil.  NUMS is
 the version as a list of integers (major minor ...); it is empty for a
-bare alias like \"opus\".  The optional `claude-' prefix and any trailing
-date component (an eight-digit YYYYMMDD snapshot, such as the 20251001 in
-\"haiku-4-5-20251001\") are ignored."
-  (let* ((name (string-remove-prefix "claude-" (or model "")))
+bare alias like \"opus\".  The provider's `:model-prefix' (e.g. `claude-')
+and any trailing date component (an eight-digit YYYYMMDD snapshot, such as
+the 20251001 in \"haiku-4-5-20251001\") are ignored."
+  (let* ((name (string-remove-prefix (or (agnostic-llm--provider-get :model-prefix) "")
+                                     (or model "")))
          (parts (split-string name "-" t)))
     (list (car parts)
           (cl-loop for p in (cdr parts)
@@ -146,51 +203,52 @@ A missing component sorts before a present one, so (4) precedes (4 8)."
         (t (< (car a) (car b)))))
 
 (defun agnostic-llm--model-spec (model)
-  "Return the `agnostic-llm-models' entry for MODEL, or nil when unknown.
-Nil MODEL resolves to the first entry (claude's default model).  A full
-name matches by `assoc'; a date-suffixed id (e.g.
+  "Return the provider `:models' entry for MODEL, or nil when unknown.
+Nil MODEL resolves to the first entry (the provider's default model).  A
+full name matches by `assoc'; a date-suffixed id (e.g.
 \"claude-haiku-4-5-20251001\") matches the entry with the same family and
 version; a bare alias (e.g. \"opus\") matches that family's newest entry
 ordered by `agnostic-llm--version<'."
-  (if (null model)
-      (car agnostic-llm-models)
-    (or (assoc model agnostic-llm-models)
-        (cl-destructuring-bind (family nums) (agnostic-llm--model-split model)
-          (cond
-           ((null family) nil)
-           (nums
-            (seq-find (lambda (entry)
-                        (equal (agnostic-llm--model-split (car entry))
-                               (list family nums)))
-                      agnostic-llm-models))
-           (t
-            (let (best best-nums)
-              (dolist (entry agnostic-llm-models best)
-                (cl-destructuring-bind (fam enums)
-                    (agnostic-llm--model-split (car entry))
-                  (when (and (equal fam family) enums
-                             (or (null best-nums)
-                                 (agnostic-llm--version< best-nums enums)))
-                    (setq best entry best-nums enums)))))))))))
+  (let ((models (agnostic-llm--models)))
+    (if (null model)
+        (car models)
+      (or (assoc model models)
+          (cl-destructuring-bind (family nums) (agnostic-llm--model-split model)
+            (cond
+             ((null family) nil)
+             (nums
+              (seq-find (lambda (entry)
+                          (equal (agnostic-llm--model-split (car entry))
+                                 (list family nums)))
+                        models))
+             (t
+              (let (best best-nums)
+                (dolist (entry models best)
+                  (cl-destructuring-bind (fam enums)
+                      (agnostic-llm--model-split (car entry))
+                    (when (and (equal fam family) enums
+                               (or (null best-nums)
+                                   (agnostic-llm--version< best-nums enums)))
+                      (setq best entry best-nums enums))))))))))))
 
 ;;; Reasoning effort
 
 (defun agnostic-llm-effort-choices-for-model (model)
   "Return the reasoning-effort levels offered for MODEL.
-The `:efforts' list from MODEL's `agnostic-llm-models' entry, or nil when
-MODEL is unknown or its entry declares no efforts.  With nil the menu's
-`-e' switch offers no choices and `agnostic-llm--menu-effort' passes no
-effort to claude."
+The `:efforts' list from MODEL's entry in the active provider's catalog,
+or nil when MODEL is unknown or its entry declares no efforts.  With nil
+the menu's `-e' switch offers no choices and `agnostic-llm--menu-effort'
+passes no effort to the CLI."
   (plist-get (cdr (agnostic-llm--model-spec model)) :efforts))
 
 (defcustom agnostic-llm-effort nil
-  "Reasoning effort passed to claude as `--effort'.
-Nil means use claude's default.  A string like \"low\", \"medium\",
+  "Reasoning effort passed to the active provider (via its `:effort-flag').
+Nil means use the CLI's own default.  A string like \"low\", \"medium\",
 or \"high\" is passed through verbatim.
 
 Normally toggled per-invocation via the `-e' switch in `agnostic-llm-menu'
 rather than set directly."
-  :type '(choice (const :tag "Default (claude picks)" nil)
+  :type '(choice (const :tag "Default (CLI picks)" nil)
                  (string :tag "Effort level"))
   :group 'agnostic-llm)
 
@@ -290,21 +348,21 @@ Honors `agnostic-llm-persistence-strategy'.  SUBPATH is relative (e.g.
     (_
      (expand-file-name (concat ".agnostic-llm/" subpath) root))))
 
-;;; Claude vterm buffer management
+;;; LLM vterm buffer management
 
 (defvar agnostic-llm--buffers (make-hash-table :test 'eq)
-  "Registry of live claude vterm buffers (used as a set; keys only).")
+  "Registry of live LLM vterm buffers (used as a set; keys only).")
 
 (defun agnostic-llm--register-buffer (buf)
-  "Register BUF as a claude buffer."
+  "Register BUF as an LLM buffer."
   (puthash buf t agnostic-llm--buffers))
 
 (defun agnostic-llm--unregister-buffer (buf)
-  "Unregister BUF from the claude buffer registry."
+  "Unregister BUF from the LLM buffer registry."
   (remhash buf agnostic-llm--buffers))
 
 (defun agnostic-llm--get-buffers ()
-  "Return a list of all live claude buffers."
+  "Return a list of all live LLM buffers."
   (cl-remove-if-not #'buffer-live-p (hash-table-keys agnostic-llm--buffers)))
 
 (defun agnostic-llm--project-label (directory)
@@ -317,67 +375,65 @@ path component."
           root)))
 
 (defconst agnostic-llm--session-buffer-prefix "*llm:"
-  "Prefix of the per-project agent session vterm buffer name.
+  "Prefix of the per-project session vterm buffer name.
 `agnostic-llm--session-buffer-name' appends the project label and a
-closing `*'.  Once the backend abstraction in
-docs/multi-backend-design.org lands, the label comes from the active
-backend.")
+closing `*'.  The prefix is provider-neutral by design.")
 
 (defun agnostic-llm--session-buffer-name (label)
-  "Return the agent session vterm buffer name for project LABEL.
+  "Return the session vterm buffer name for project LABEL.
 Single source of truth for the `*llm:PROJECT*' buffer name, shared
 by `agnostic-llm', `agnostic-llm--bubble-promote', and
 `agnostic-llm-toggle-vterm-session'.  The prefix comes from
-`agnostic-llm--session-buffer-prefix', which the active backend supplies
-once the backends in docs/multi-backend-design.org exist."
+`agnostic-llm--session-buffer-prefix'."
   (format "%s%s*" agnostic-llm--session-buffer-prefix label))
 
-(defun agnostic-llm--claude-session-dir (dir)
-  "Return the `~/.claude/projects/<encoded>' path for DIR.
-Claude encodes a project directory by replacing each `/' and `.'
-with `-' (e.g. /home/u/.config → -home-u--config)."
+(defun agnostic-llm--session-dir (dir)
+  "Return the provider's session-store path for DIR.
+DIR encodes into one component under `:session-dir' by replacing each `/'
+and `.' with `-' (e.g. /home/u/.config → -home-u--config), matching
+claude's layout."
   (let ((encoded (replace-regexp-in-string
                   "[/.]" "-"
                   (directory-file-name (expand-file-name dir)))))
-    (expand-file-name encoded "~/.claude/projects/")))
+    (expand-file-name encoded (agnostic-llm--provider-get :session-dir))))
 
-(defun agnostic-llm--claude-has-session-p (dir)
-  "Return non-nil if DIR has at least one recorded claude session."
-  (let ((sdir (agnostic-llm--claude-session-dir dir)))
+(defun agnostic-llm--session-exists-p (dir)
+  "Return non-nil if DIR has at least one recorded provider session."
+  (let ((sdir (agnostic-llm--session-dir dir)))
     (and (file-directory-p sdir)
-         (directory-files sdir nil "\\.jsonl\\'" t))))
+         (directory-files sdir nil (agnostic-llm--provider-get :session-file-regexp) t))))
 
-(defun agnostic-llm--claude-shell-command (_root)
-  "Return the claude shell command.
-Uses `claude -c' (continue most recent session) when the current
-directory has a recorded session, otherwise plain `claude'.
-Appends `--model' when `agnostic-llm-model' is set, `--effort' when
-`agnostic-llm-effort' is set, and `--dangerously-skip-permissions' when
-`agnostic-llm-dangerously-skip-permissions' is non-nil."
-  (let* ((base (if (agnostic-llm--claude-has-session-p default-directory)
-                   "claude -c"
-                 "claude"))
+(defun agnostic-llm--session-shell-command (_root)
+  "Return the shell command launching the provider's interactive session.
+Adds the `:continue-flag' when the current directory has a recorded
+session.  Appends `:model-flag', `:effort-flag', and `:dangerous-flag'
+when `agnostic-llm-model', `agnostic-llm-effort', and
+`agnostic-llm-dangerously-skip-permissions' are respectively set."
+  (let* ((exe  (agnostic-llm--provider-get :executable))
+         (base (if (agnostic-llm--session-exists-p default-directory)
+                   (concat exe " " (agnostic-llm--provider-get :continue-flag))
+                 exe))
          (with-model (if agnostic-llm-model
-                         (concat base " --model "
+                         (concat base " " (agnostic-llm--provider-get :model-flag) " "
                                  (shell-quote-argument agnostic-llm-model))
                        base))
          (with-effort (if agnostic-llm-effort
-                          (concat with-model " --effort "
+                          (concat with-model " " (agnostic-llm--provider-get :effort-flag) " "
                                   (shell-quote-argument agnostic-llm-effort))
                         with-model)))
     (if agnostic-llm-dangerously-skip-permissions
-        (concat with-effort " --dangerously-skip-permissions")
+        (concat with-effort " " (agnostic-llm--provider-get :dangerous-flag))
       with-effort)))
 
 ;;; Show last response in a side buffer
 ;;
 ;; Reads the current *llm:* vterm's session JSONL (newest .jsonl in the
-;; buffer's project dir, via `agnostic-llm--claude-session-dir') and renders Claude's
-;; most recent assistant turn into a plain-text buffer in another window.
-;; Nothing is written to disk.
+;; buffer's project dir, via `agnostic-llm--session-dir') and renders the
+;; LLM's most recent assistant turn into a plain-text buffer in another
+;; window.  Nothing is written to disk.
 
 (defcustom agnostic-llm-response-render-function #'agnostic-llm--render-response-plain
-  "Function that renders an extracted Claude response for display.
+  "Function that renders an extracted LLM response for display.
 Called with one argument, the raw response STRING (already joined from
 the assistant turn's text blocks), in a fresh buffer that is current and
 empty.  It should insert the display text and may set the major mode.
@@ -391,14 +447,13 @@ or display plumbing."
   :group 'agnostic-llm)
 
 (defun agnostic-llm--session-file (dir)
-  "Return the newest session .jsonl for DIR, or nil if none.
-DIR is resolved to its claude project dir via
-`agnostic-llm--claude-session-dir'; files are ranked by modification time
-so the session the live claude is actively appending wins (session
-filenames are random UUIDs, so name order is meaningless)."
-  (let ((sdir (agnostic-llm--claude-session-dir dir)))
+  "Return the newest session transcript file for DIR, or nil if none.
+Files under `agnostic-llm--session-dir' matching `:session-file-regexp'
+are ranked by mtime, so the session the live CLI is appending wins (names
+are random UUIDs, so name order is meaningless)."
+  (let ((sdir (agnostic-llm--session-dir dir)))
     (when (file-directory-p sdir)
-      (car (sort (directory-files sdir t "\\.jsonl\\'" t)
+      (car (sort (directory-files sdir t (agnostic-llm--provider-get :session-file-regexp) t)
                  (lambda (a b)
                    (time-less-p (file-attribute-modification-time
                                  (file-attributes b))
@@ -408,7 +463,7 @@ filenames are random UUIDs, so name order is meaningless)."
 (defun agnostic-llm--session-records (file)
   "Parse FILE (JSONL) into a list of alists, in file order.
 Lines that fail to parse as a JSON object are skipped, so a partially
-written trailing line (claude still flushing mid-write) can't error."
+written trailing line (the CLI still flushing mid-write) can't error."
   (let (records)
     (with-temp-buffer
       (insert-file-contents file)
@@ -445,7 +500,7 @@ truncate the latest turn."
        (not (eq t (alist-get 'isSidechain record)))))
 
 (defun agnostic-llm--extract-last-response (records)
-  "Return Claude's latest assistant response text from RECORDS, or nil.
+  "Return the latest assistant response text from RECORDS, or nil.
 The latest turn is every assistant `text' block appearing after the last
 genuine human prompt; blocks are joined with blank lines.  `thinking' and
 `tool_use' blocks, sidechain assistant lines, and API-error lines are
@@ -477,7 +532,7 @@ Current buffer is fresh and current; leaves it in `fundamental-mode'."
 
 ;;;###autoload
 (defun agnostic-llm-show-last-response ()
-  "Show the current claude session's latest response in another window.
+  "Show the current session's latest response in another window.
 Must be invoked from a `*llm:PROJECT*' vterm.  Locates that buffer's
 session JSONL (newest .jsonl under its project dir) without writing
 anything to disk, extracts the most recent assistant turn, and renders it
@@ -486,12 +541,12 @@ via `agnostic-llm-response-render-function' into a reused
 the top."
   (interactive)
   (unless (agnostic-llm-buffer-p)
-    (user-error "Not a claude buffer"))
+    (user-error "Not an LLM buffer"))
   (let* ((dir   default-directory)
          (label (car (agnostic-llm--project-label dir)))
          (file  (agnostic-llm--session-file dir)))
     (unless file
-      (user-error "No claude session found for %s" label))
+      (user-error "No session found for %s" label))
     (let ((response (agnostic-llm--extract-last-response (agnostic-llm--session-records file))))
       (unless response
         (user-error "No assistant response found in latest turn"))
@@ -509,7 +564,7 @@ the top."
 
 ;;;###autoload
 (defun agnostic-llm (&optional user-root label)
-  "Open Claude CLI in a vterm buffer named *llm:project*.
+  "Open the LLM CLI in a vterm buffer named *llm:project*.
 With non-nil USER-ROOT, target that directory instead of the current
 project.  With non-nil LABEL, name the buffer *llm:LABEL* instead of
 deriving the label from the project directory's final path component.
@@ -535,16 +590,16 @@ With \\[universal-argument] \\[universal-argument]: new buffer, fresh session."
                (pop-to-buffer existing))
               (t
                (when existing (kill-buffer existing))
-               (let ((vterm-shell (agnostic-llm--claude-shell-command root)))
+               (let ((vterm-shell (agnostic-llm--session-shell-command root)))
                  (vterm-other-window base)
                  (agnostic-llm--register-buffer (current-buffer)))))))
           ((= prefix 4)
-           (let ((vterm-shell (agnostic-llm--claude-shell-command root))
+           (let ((vterm-shell (agnostic-llm--session-shell-command root))
                  (name (generate-new-buffer-name base)))
              (vterm-other-window name)
              (agnostic-llm--register-buffer (current-buffer))))
           ((>= prefix 16)
-           (let ((vterm-shell "claude")
+           (let ((vterm-shell (agnostic-llm--provider-get :executable))
                  (name (generate-new-buffer-name base)))
              (vterm-other-window name)
              (agnostic-llm--register-buffer (current-buffer)))))
@@ -572,10 +627,10 @@ With prefix: always create a new vterm buffer."
             (switch-to-buffer (car vterm-bufs))
           (vterm base))))))
 
-;;; Claude vterm buffer predicate
+;;; LLM vterm buffer predicate
 
 (defun agnostic-llm-buffer-p (&optional buf)
-  "Return non-nil if BUF (default: current buffer) is a claude vterm buffer."
+  "Return non-nil if BUF (default: current buffer) is an LLM vterm buffer."
   (string-prefix-p agnostic-llm--session-buffer-prefix
                    (buffer-name (or buf (current-buffer)))))
 
@@ -587,7 +642,7 @@ With prefix: always create a new vterm buffer."
            agnostic-llm--buffers))
 
 (defun agnostic-llm--cleanup-buffer ()
-  "Unregister the current buffer from the claude buffer list."
+  "Unregister the current buffer from the LLM buffer list."
   (agnostic-llm--unregister-buffer (current-buffer)))
 
 (add-hook 'kill-buffer-hook #'agnostic-llm--cleanup-buffer)
@@ -614,9 +669,9 @@ Offers project-relative file paths when the point follows `@'."
                   :annotation-function (lambda (_) " file"))))))))
 
 (define-derived-mode agnostic-llm-prompt-mode text-mode "Agnostic-LLM"
-  "Major mode for composing multi-line Claude prompts.
+  "Major mode for composing multi-line LLM prompts.
 \\<agnostic-llm-prompt-mode-map>\\[agnostic-llm-prompt-send] to send, \\[agnostic-llm-prompt-cancel] to cancel."
-  (setq header-line-format " Claude  C-c C-c send | C-c C-k cancel")
+  (setq header-line-format " LLM  C-c C-c send | C-c C-k cancel")
   (add-hook 'completion-at-point-functions #'agnostic-llm--prompt-capf nil t))
 
 (define-key agnostic-llm-prompt-mode-map (kbd "C-c C-c") #'agnostic-llm-prompt-send)
@@ -684,12 +739,12 @@ current one."
 
 (defcustom agnostic-llm-bubble-prompt-prefix ""
   "String prepended to the user's text when sending in bubble mode.
-Empty by default — the bubble sends your prompt verbatim through
-`claude -p', which works in any environment.
+Empty by default — the bubble sends your prompt verbatim through the
+provider's one-shot invocation, which works in any environment.
 
-Set to \"/btw \" (trailing space) if you've defined a matching
-custom slash command at `~/.claude/commands/btw.md' or at
-`<project>/.claude/commands/btw.md'.  Any other string works too —
+Set to \"/btw \" (trailing space) if you've defined a matching custom
+slash command (for the claude provider, at `~/.claude/commands/btw.md' or
+`<project>/.claude/commands/btw.md').  Any other string works too —
 e.g. \"By the way, briefly: \" as a plain-text framing preamble."
   :type 'string
   :group 'agnostic-llm)
@@ -711,11 +766,11 @@ e.g. \"By the way, briefly: \" as a plain-text framing preamble."
   "Non-nil when this prompt buffer is in bubble (inline-response) mode.")
 
 (defvar-local agnostic-llm--bubble-process nil
-  "Async `claude -p' process for a bubble, if running.")
+  "Async one-shot provider process for a bubble, if running.")
 
 (defvar-local agnostic-llm--bubble-last-prompt nil
   "The most recent user prompt sent in this bubble.
-Used by `agnostic-llm--bubble-promote' to forward it to the main claude session.")
+Used by `agnostic-llm--bubble-promote' to forward it to the main session.")
 
 (defvar-local agnostic-llm--bubble-input-start nil
   "Marker at the start of the user's current input region.
@@ -723,10 +778,10 @@ Nil on the very first send (no conversation history yet); a live marker
 once the first reply has settled and subsequent turns are being typed.")
 
 (defvar-local agnostic-llm--bubble-session-id nil
-  "UUID pinning every turn of this bubble to the same claude session.
-Generated lazily on bubble creation; used with `--session-id' on every
-`claude -p' invocation and with `--resume' when promoting to a
-full `*llm:PROJECT*' vterm.")
+  "UUID pinning every turn of this bubble to the same session.
+Generated lazily on bubble creation; used with the provider's
+`:session-id-flag' on every one-shot invocation and with its
+`:resume-flag' when promoting to a full `*llm:PROJECT*' vterm.")
 
 (defvar-local agnostic-llm--bubble-model nil
   "Buffer-local copy of `agnostic-llm-model' captured at bubble creation.
@@ -740,7 +795,7 @@ transient mid-conversation doesn't retroactively change the session's
 permission posture.")
 
 (defvar-local agnostic-llm--bubble-thinking-overlay nil
-  "Overlay showing the animated `...' indicator while Claude is thinking.")
+  "Overlay showing the animated `...' indicator while the LLM is thinking.")
 
 (defvar-local agnostic-llm--bubble-thinking-timer nil
   "Buffer-local timer animating `agnostic-llm--bubble-thinking-overlay'.")
@@ -804,17 +859,21 @@ can never strand a repeating timer on a dead buffer."
           (random 65536) (random 65536) (random 65536)))
 
 (defun agnostic-llm--bubble-command (prompt)
-  "Build the `claude' argv for PROMPT on this bubble's pinned session.
-Every turn uses `--session-id' with the same UUID, so claude treats all
-popup turns as one conversation regardless of what else is happening in
-the project directory.  Prepends `agnostic-llm-bubble-prompt-prefix' to PROMPT;
-passes `--model' from `agnostic-llm--bubble-model' when set, and
-`--dangerously-skip-permissions' when `agnostic-llm--bubble-dangerous' is set."
+  "Build the provider's argv for PROMPT on this bubble's pinned session.
+The `:session-id-flag' carries the same UUID every turn, so the CLI treats
+all popup turns as one conversation.  Prepends
+`agnostic-llm-bubble-prompt-prefix' to PROMPT; adds `:model-flag' from
+`agnostic-llm--bubble-model' and `:dangerous-flag' from
+`agnostic-llm--bubble-dangerous' when set."
   (let ((text (concat agnostic-llm-bubble-prompt-prefix prompt)))
-    (append (list "claude" "--session-id" agnostic-llm--bubble-session-id)
-            (when agnostic-llm--bubble-model    (list "--model" agnostic-llm--bubble-model))
-            (when agnostic-llm--bubble-dangerous '("--dangerously-skip-permissions"))
-            (list "-p" text))))
+    (append (list (agnostic-llm--provider-get :executable)
+                  (agnostic-llm--provider-get :session-id-flag)
+                  agnostic-llm--bubble-session-id)
+            (when agnostic-llm--bubble-model
+              (list (agnostic-llm--provider-get :model-flag) agnostic-llm--bubble-model))
+            (when agnostic-llm--bubble-dangerous
+              (list (agnostic-llm--provider-get :dangerous-flag)))
+            (list (agnostic-llm--provider-get :print-flag) text))))
 
 (defun agnostic-llm--bubble-clean-chunk (chunk)
   "Strip CR, ANSI CSI sequences, and OSC sequences from CHUNK.
@@ -827,7 +886,7 @@ changes like ESC ] ... BEL) and stray CR are removed by hand."
 (defun agnostic-llm--bubble-filter (proc chunk)
   "Process filter: clean CHUNK and append to PROC's buffer.
 On the first chunk, replaces the `thinking' indicator with the
-claude turn marker."
+LLM turn marker."
   (when (buffer-live-p (process-buffer proc))
     (with-current-buffer (process-buffer proc)
       (let ((inhibit-read-only t)
@@ -860,28 +919,27 @@ claude turn marker."
            (setq-local agnostic-llm--bubble-input-start (copy-marker (point) nil))
            (setq header-line-format
                  (propertize
-                  " Claude  C-c C-c send · C-c C-k close · C-c C-m →claude"
+                  " LLM  C-c C-c send · C-c C-k close · C-c C-m →llm"
                   'face 'agnostic-llm-bubble-header-face)))
           ('signal
            (setq header-line-format
-                 (propertize " Claude  (cancelled — C-c C-k close)"
+                 (propertize " LLM  (cancelled — C-c C-k close)"
                              'face 'agnostic-llm-bubble-header-face))))))))
 
 (defun agnostic-llm--bubble-promote ()
   "Close the bubble and open a `*llm:PROJECT*' vterm on the same session.
-The new vterm continues the same session the popup has been driving.
+The new vterm continues the session the popup has been driving.
 
-Every popup turn runs with `--session-id <UUID>', so the conversation
-is pinned to one specific claude session.  Promote spawns a fresh
-interactive claude with `--resume <UUID>' on the same UUID, loading
-all prior turns regardless of what else is happening in the directory."
+Popup turns run with `:session-id-flag' <UUID>, pinning the conversation
+to one session.  Promote spawns a fresh interactive CLI with `:resume-flag'
+<UUID>, loading all prior turns."
   (interactive)
   (unless agnostic-llm--bubble-last-prompt
     (user-error "Nothing to promote yet — send a turn first"))
   (unless agnostic-llm--bubble-session-id
     (user-error "No session id recorded for this bubble"))
   (when (process-live-p agnostic-llm--bubble-process)
-    (user-error "Claude is still responding — wait, or C-c C-k to cancel first"))
+    (user-error "The LLM is still responding — wait, or C-c C-k to cancel first"))
   (let* ((root      agnostic-llm--prompt-project-root)
          (dir       (or root default-directory))
          (label     (car (agnostic-llm--project-label dir)))
@@ -893,14 +951,17 @@ all prior turns regardless of what else is happening in the directory."
          (bubble    (current-buffer)))
     (kill-buffer bubble)
     (let ((default-directory dir)
-          (vterm-shell (format "claude --resume %s%s%s"
+          (vterm-shell (format "%s %s %s%s%s"
+                               (agnostic-llm--provider-get :executable)
+                               (agnostic-llm--provider-get :resume-flag)
                                (shell-quote-argument sid)
                                (if model
-                                   (format " --model %s"
+                                   (format " %s %s"
+                                           (agnostic-llm--provider-get :model-flag)
                                            (shell-quote-argument model))
                                  "")
                                (if dangerous
-                                   " --dangerously-skip-permissions"
+                                   (concat " " (agnostic-llm--provider-get :dangerous-flag))
                                  ""))))
       (vterm-other-window name)
       (agnostic-llm--register-buffer (current-buffer)))))
@@ -912,11 +973,11 @@ Thin wrapper around `agnostic-llm-prompt' with the prefix argument
 preset, so it is directly bindable and transient-invokable without
 `universal-argument'.
 
-The bubble runs `claude -p', which is non-interactive: any tool that
-would normally ask you something (permission prompts, AskUserQuestion)
-is auto-failed by the CLI before reaching us.  If a turn needs that kind
-of interaction, promote with \\<agnostic-llm-prompt-mode-map>\\[agnostic-llm--bubble-promote] to a `*llm:PROJECT*' vterm
-that resumes the same session."
+The bubble runs the provider's one-shot invocation, which is
+non-interactive: any tool that would normally ask you something (permission
+prompts, AskUserQuestion) is auto-failed by the CLI before reaching us.  If
+a turn needs that kind of interaction, promote with
+\\<agnostic-llm-prompt-mode-map>\\[agnostic-llm--bubble-promote] to a `*llm:PROJECT*' vterm that resumes the same session."
   (interactive)
   (let ((current-prefix-arg '(4)))
     (call-interactively #'agnostic-llm-prompt)))
@@ -925,11 +986,11 @@ that resumes the same session."
   "Spawn a new bubble turn (first send or post-response follow-up).
 Refuses while a turn is already running."
   (if (process-live-p agnostic-llm--bubble-process)
-      (user-error "Claude is still responding — wait, or C-c C-k to cancel")
+      (user-error "The LLM is still responding — wait, or C-c C-k to cancel")
     (agnostic-llm--bubble-spawn-turn)))
 
 (defun agnostic-llm--bubble-spawn-turn (&optional explicit-prompt)
-  "Start a new claude turn (first send or follow-up after completion).
+  "Start a new LLM turn (first send or follow-up after completion).
 With EXPLICIT-PROMPT, use it as the prompt instead of reading the
 buffer's input region, and skip echoing the user turn into the buffer
 so only the response is rendered."
@@ -959,7 +1020,7 @@ so only the response is rendered."
       (setq-local agnostic-llm--bubble-input-start nil)
       (agnostic-llm--bubble-start-thinking (current-buffer))
       (setq header-line-format
-            (propertize " Claude  (running — C-c C-k cancel)"
+            (propertize " LLM  (running — C-c C-k cancel)"
                         'face 'agnostic-llm-bubble-header-face)))
     (let* ((args (agnostic-llm--bubble-command prompt))
            (process-environment
@@ -972,10 +1033,10 @@ so only the response is rendered."
 
 ;;;###autoload
 (defun agnostic-llm-prompt-send ()
-  "Send the contents of the prompt buffer to Claude.
-In bubble mode: run `claude -p' as a subprocess and stream the reply
-into the same bubble.  Otherwise: hand off to the project's claude
-vterm session (queues if busy)."
+  "Send the contents of the prompt buffer to the LLM.
+In bubble mode: run the provider's one-shot invocation as a subprocess
+and stream the reply into the same bubble.  Otherwise: hand off to the
+project's session vterm (queues if busy)."
   (interactive)
   (if agnostic-llm--prompt-bubble
       (agnostic-llm-prompt-bubble-send)
@@ -1002,7 +1063,7 @@ Otherwise close the bubble and kill its buffer."
       (goto-char (point-max))
       (insert "\n\n[cancelled]\n"))
     (setq header-line-format
-          (propertize " Claude bubble  (cancelled — C-c C-k close)"
+          (propertize " LLM bubble  (cancelled — C-c C-k close)"
                       'face 'agnostic-llm-bubble-header-face)))
    (t
     (let ((buf (current-buffer)))
@@ -1011,15 +1072,15 @@ Otherwise close the bubble and kill its buffer."
 
 ;;;###autoload
 (defun agnostic-llm-prompt (&optional arg)
-  "Open a multi-line prompt buffer for Claude.
+  "Open a multi-line prompt buffer for the LLM.
 Pre-populates context based on the current state:
 - Active region: inserts a file/region context prefix
 - Otherwise: inserts a file+line context prefix
 
 With \\[universal-argument] ARG: bubble mode.  Opens a fresh throwaway
-bubble with no file-context prefix; on send, runs `claude -p <prompt>'
-as a subprocess and streams the reply into the same bubble.
-Nothing is saved to prompt history and the main claude vterm is
+bubble with no file-context prefix; on send, runs the provider's one-shot
+invocation as a subprocess and streams the reply into the same bubble.
+Nothing is saved to prompt history and the main session vterm is
 untouched."
   (interactive "P")
   (let* ((bubble (consp arg))
@@ -1058,7 +1119,7 @@ untouched."
         (setq-local agnostic-llm--bubble-input-start (copy-marker (point) nil))
         (setq header-line-format
               (propertize
-               " Claude  C-c C-c send · C-c C-k close · C-c C-m →claude"
+               " LLM  C-c C-c send · C-c C-k close · C-c C-m →llm"
                'face 'agnostic-llm-bubble-header-face))))
     (agnostic-llm--present-prompt-buffer buf)))
 
@@ -1209,14 +1270,14 @@ where the timer fires but nothing actually changed on disk)."
 
 ;;;###autoload
 (defun agnostic-llm-switch-buffer ()
-  "Switch to another claude buffer."
+  "Switch to another LLM buffer."
   (interactive)
   (let ((bufs (agnostic-llm--get-buffers)))
     (unless bufs
-      (user-error "No claude buffers"))
+      (user-error "No LLM buffers"))
     (let ((entries (cl-loop for buffer in bufs
                             collect (cons (buffer-name buffer) buffer))))
-      (let* ((choice (completing-read "Claude buffer: "
+      (let* ((choice (completing-read "LLM buffer: "
                                       (mapcar #'car entries)
                                       nil t))
              (buf (cdr (assoc choice entries))))
@@ -1228,7 +1289,7 @@ where the timer fires but nothing actually changed on disk)."
            (get-buffer-window-list buf nil 'visible)))
 
 (defun agnostic-llm--cycle-buffer (direction)
-  "Switch current window to the next/previous claude buffer.
+  "Switch current window to the next/previous LLM buffer.
 DIRECTION is +1 (forward) or -1 (backward).  Buffers already visible
 in another window are deprioritized (sorted to the back), so cycling
 prefers ones not yet on screen."
@@ -1240,7 +1301,7 @@ prefers ones not yet on screen."
                          ((and va (not vb)) nil)
                          ((and (not va) vb) t)
                          (t (string< (buffer-name a) (buffer-name b)))))))))
-    (unless bufs (user-error "No claude buffers"))
+    (unless bufs (user-error "No LLM buffers"))
     (let* ((pos (cl-position (current-buffer) bufs))
            (next (if pos
                      (nth (mod (+ pos direction) (length bufs)) bufs)
@@ -1249,13 +1310,13 @@ prefers ones not yet on screen."
 
 ;;;###autoload
 (defun agnostic-llm-next-buffer ()
-  "Switch current window to the next claude buffer."
+  "Switch current window to the next LLM buffer."
   (interactive)
   (agnostic-llm--cycle-buffer +1))
 
 ;;;###autoload
 (defun agnostic-llm-previous-buffer ()
-  "Switch current window to the previous claude buffer."
+  "Switch current window to the previous LLM buffer."
   (interactive)
   (agnostic-llm--cycle-buffer -1))
 
@@ -1478,7 +1539,7 @@ Source-file comment is left untouched — remove it manually if desired."
       (pop-to-buffer buf))))
 
 (defun agnostic-llm--send-annotations (kind)
-  "Send all KIND annotations for the current project to Claude."
+  "Send all KIND annotations for the current project to the LLM."
   (let* ((root (agnostic-llm--current-root))
          (entries (agnostic-llm--annotation-entries root kind)))
     (unless entries
@@ -1510,7 +1571,7 @@ Source-file comment is left untouched — remove it manually if desired."
          (interactive)
          (agnostic-llm--list-annotations ,kind))
        (defun ,(intern (format "agnostic-llm-send-%ss" lc)) ()
-         ,(format "Send all %ss to Claude." kind)
+         ,(format "Send all %ss to the LLM." kind)
          (interactive)
          (agnostic-llm--send-annotations ,kind)))))
 
@@ -1556,9 +1617,9 @@ function)."
 (defun agnostic-llm--menu-effort ()
   "The effort selected in `agnostic-llm-menu', filtered by the current model.
 Returns nil when no effort is set, or when the set effort is absent from
-the current model's `:efforts' in `agnostic-llm-models' (e.g. \"ultracode\"
+the current model's `:efforts' in the provider catalog (e.g. \"ultracode\"
 when the selected model does not offer it), so an unsupported level is
-never passed to claude."
+never passed to the CLI."
   (let ((effort (agnostic-llm--menu-flag "--effort=")))
     (and effort
          (member effort (agnostic-llm-effort-choices-for-model (agnostic-llm--menu-current-model)))
@@ -1566,14 +1627,14 @@ never passed to claude."
 
 ;;;###autoload
 (defun agnostic-llm-set-default-model (model)
-  "Set MODEL as the default for new claude sessions and persist it.
-Empty input clears the default (claude will pick).  The value is saved
+  "Set MODEL as the default for new sessions and persist it.
+Empty input clears the default (the CLI will pick).  The value is saved
 via `customize-save-variable', so it survives Emacs restarts.
 
 Per-invocation overrides via the menu's `-m' switch are unaffected."
   (interactive
    (list (completing-read
-          (format "Default model (current: %s, empty = claude picks): "
+          (format "Default model (current: %s, empty = CLI picks): "
                   (or agnostic-llm-model "none"))
           (agnostic-llm-model-choices) nil nil nil nil agnostic-llm-model)))
   (let ((value (if (or (string-empty-p (or model ""))
@@ -1582,7 +1643,7 @@ Per-invocation overrides via the menu's `-m' switch are unaffected."
     (customize-save-variable 'agnostic-llm-model value)
     (message "Default model %s"
              (if value (format "set to %s (saved)" value)
-               "cleared (claude picks)"))))
+               "cleared (CLI picks)"))))
 
 (transient-define-suffix agnostic-llm--menu-prompt-bubble ()
   "Launch the inline-conversation bubble; honors the menu's switches."
@@ -1603,7 +1664,7 @@ Per-invocation overrides via the menu's `-m' switch are unaffected."
 
 (transient-define-suffix agnostic-llm--menu-open-session ()
   "Open the project's agent session vterm; honors the menu's switches."
-  :description "Open Claude in project"
+  :description "Open session in project"
   (interactive)
   (let* ((scope (transient-scope))
          (agnostic-llm-dangerously-skip-permissions
@@ -1625,7 +1686,7 @@ Per-invocation overrides via the menu's `-m' switch are unaffected."
   (format "Effort [%s]" (or agnostic-llm-effort "default")))
 
 (defun agnostic-llm--menu-header ()
-  "Options group title; highlights a pinned session override when one is set.
+  "Return the options-group title, flagging any pinned session override.
 The override -- directory ROOT and buffer LABEL passed to `agnostic-llm-menu' --
 lives in the transient scope; `agnostic-llm--menu-open-session' honors it."
   (let ((root  (plist-get (transient-scope) :root))
@@ -1642,7 +1703,7 @@ lives in the transient scope; `agnostic-llm--menu-open-session' honors it."
 
 ;;;###autoload
 (transient-define-prefix agnostic-llm-menu (&optional root label)
-  "Claude CLI commands.
+  "LLM CLI commands.
 ROOT and LABEL, when supplied (e.g. by an integration such as org-glance), pin
 the session to that directory and buffer name instead of deriving them from the
 current project; the header highlights the override."
@@ -1704,7 +1765,7 @@ to the project's vterm first (reusing or spawning)."
             (pcase-let* ((`(,_ . ,root) (agnostic-llm--project-label default-directory))
                          (default-directory (or root default-directory)))
               (if (equal kind "vterm")
-                  (let ((vterm-shell (agnostic-llm--claude-shell-command root)))
+                  (let ((vterm-shell (agnostic-llm--session-shell-command root)))
                     (vterm target)
                     (agnostic-llm--register-buffer (current-buffer)))
                 (vterm target)))))
@@ -1713,7 +1774,7 @@ to the project's vterm first (reusing or spawning)."
 
 ;;;###autoload
 (defun agnostic-llm-describe-at-point ()
-  "Ask Claude to describe the symbol at point or the active region.
+  "Ask the LLM to describe the symbol at point or the active region.
 Spawns a bubble seeded with a prompt referencing the visiting file and
 line(s), and auto-sends.  If the buffer isn't visiting a file, the
 buffer name is used as context instead."
@@ -1759,7 +1820,7 @@ buffer name is used as context instead."
   "Neutralize global display settings that corrupt vterm's character grid.
 Some Emacs configs set `line-spacing' globally; the extra
 pixels between rows break the vertical box-drawing borders of TUIs like
-interactive `claude', so it is zeroed buffer-locally here.  Symbol
+an interactive agentic CLI, so it is zeroed buffer-locally here.  Symbol
 prettification (from `global-prettify-symbols-mode') has no place in a
 terminal grid and is likewise disabled.
 
@@ -1793,7 +1854,7 @@ suspended.")
   "Suspend the foreground vterm process and enter `vterm-copy-mode'.
 Resumes the process automatically when copy-mode is exited.
 
-Useful for copying from TUIs (e.g. interactive `claude') that
+Useful for copying from TUIs (e.g. an interactive agentic CLI) that
 continuously redraw and overwrite selections.  No-op outside vterm."
   (interactive)
   ;; (unless (derived-mode-p 'vterm-mode)
@@ -1807,7 +1868,7 @@ continuously redraw and overwrite selections.  No-op outside vterm."
 ;;
 ;; vterm forces buffer point to the terminal cursor (bottom) on every redraw
 ;; (vterm-module.c term_redraw -> adjust_topline, unconditional), so a
-;; streaming TUI like `claude' makes scrollback unreadable.  There is NO
+;; streaming agentic CLI makes scrollback unreadable.  There is NO
 ;; public "disable follow" knob; the only sanctioned freeze is
 ;; `vterm-copy-mode', which sends XOFF (`<stop>' -> tcflow TCOOFF) so the
 ;; child PAUSES and no further output arrives to trigger the redraw.  We do
@@ -1828,7 +1889,7 @@ continuously redraw and overwrite selections.  No-op outside vterm."
 (defcustom agnostic-llm-vterm-autofreeze-buffers #'agnostic-llm-buffer-p
   "Predicate deciding whether auto-freeze is active in a vterm buffer.
 Called with no args in the vterm buffer; non-nil enables the behavior.
-Defaults to claude buffers only, so plain `*vterm:…*' shells are untouched."
+Defaults to LLM buffers only, so plain `*vterm:…*' shells are untouched."
   :type 'function
   :group 'agnostic-llm)
 
@@ -1856,7 +1917,7 @@ there means we are following; being above it means the user scrolled up."
                       (line-beginning-position))))
 
 (defun agnostic-llm--vterm-freeze ()
-  "Enter copy-mode to freeze the view (XOFF pauses claude).  Idempotent.
+  "Enter copy-mode to freeze the view (XOFF pauses the CLI).  Idempotent.
 Sets `agnostic-llm--vterm-autofreeze-active' so only our managed freeze gets the
 resume overlay map + header-line, and leaves `agnostic-llm--vterm-copy-resume' nil
 so exiting sends only XON, never the `fg' of the manual suspend path."
@@ -1911,13 +1972,13 @@ The key is not lost.  Bound to self-inserting keys while auto-frozen."
       (define-key map (kbd k) #'agnostic-llm--vterm-resume-and-resend))
     (define-key map (kbd "q") #'agnostic-llm--vterm-resume-only)
     map)
-  "Overlay keymap active while a claude vterm is auto-frozen.
+  "Overlay keymap active while an LLM vterm is auto-frozen.
 Layered above `vterm-copy-mode-map' so it adds resume keys without
 overriding copy-mode's bindings.  Note: this rebinds RET to
 resume-and-send-newline; drop the RET/<return> entries if you prefer
 RET to copy the line (`vterm-copy-mode-done').
 Deliberately binds neither EOF nor SIGINT, so a stray key while reading
-can never end or interrupt claude.")
+can never end or interrupt the CLI.")
 
 (defun agnostic-llm--vterm-autofreeze-copy-hook ()
   "Run on `vterm-copy-mode-hook' (fires on BOTH enable and disable).

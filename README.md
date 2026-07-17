@@ -1,27 +1,29 @@
 # agnostic-llm
 
-Claude CLI integration for Emacs.
+Agentic CLI integration for Emacs.
 
-Drives the [`claude`](https://docs.anthropic.com/en/docs/claude-cli) CLI from
-Emacs: per-project terminal sessions, a prompt buffer with `@file` completion,
-an inline streaming "bubble", a response viewer, and a FIXME/TODO annotation
-system — all gathered under a [`transient`](https://github.com/magit/transient)
-menu.
+Drives an agentic CLI from Emacs (the
+[`claude`](https://docs.anthropic.com/en/docs/claude-cli) CLI by default):
+per-project terminal sessions, a prompt buffer with `@file` completion, an
+inline streaming "bubble", a response viewer, and a FIXME/TODO annotation
+system — all under a [`transient`](https://github.com/magit/transient) menu.
 
-The package name is backend-agnostic by design: `claude` is the first backend,
-and the roadmap for driving other agentic CLIs (codex, gemini, ...) from the
-same UX lives in [`docs/multi-backend-design.org`](docs/multi-backend-design.org).
+Provider-agnostic: the executable, flags, session-store layout, and
+model/effort catalog live in `agnostic-llm-providers`, keyed by
+`agnostic-llm-provider`. `claude` is the default; add an entry to drive
+another agentic CLI (codex, gemini, ...). Roadmap in
+[`docs/multi-backend-design.org`](docs/multi-backend-design.org).
 
 ## Features
 
 - **Project sessions** — `M-x agnostic-llm` opens a dedicated
   `*llm:PROJECT*` [`vterm`](https://github.com/akermu/emacs-libvterm)
-  running `claude`, one per project root. It continues the most recent session
-  when one exists.
+  running the provider's CLI (`claude` by default), one per project root. It
+  continues the most recent session when one exists.
 - **Prompt buffer** — `agnostic-llm-prompt` composes a multi-line prompt with
   `@file` completion (project-relative), auto-prepending file/region context,
   and hands it to the session. Prompts are saved to per-project history.
-- **Inline bubble** — a throwaway `claude -p` conversation that streams the
+- **Inline bubble** — a throwaway one-shot conversation that streams the
   reply inline, pinned to its own session id, without disturbing the main
   vterm. Promote it (`C-c C-m`) to a full `*llm:PROJECT*` vterm that resumes
   the same session.
@@ -29,7 +31,7 @@ same UX lives in [`docs/multi-backend-design.org`](docs/multi-backend-design.org
   assistant turn (parsed from the session JSONL) into a read-only buffer.
   Nothing is written to disk.
 - **Annotations** — drop `FIXME`/`TODO` comments at point, persisted and
-  listable per project, and hand the whole set back to Claude to resolve.
+  listable per project, and hand the whole set back to the LLM to resolve.
 - **Model / effort switches** — pick the model and reasoning effort per
   invocation from the menu, or set a persistent default.
 
@@ -38,8 +40,8 @@ same UX lives in [`docs/multi-backend-design.org`](docs/multi-backend-design.org
 - Emacs 28.1+ (built `--with-modules`, for `vterm`)
 - [`vterm`](https://github.com/akermu/emacs-libvterm) and
   [`transient`](https://github.com/magit/transient)
-- The [`claude`](https://docs.anthropic.com/en/docs/claude-cli) CLI on `PATH`,
-  authenticated.
+- The active provider's CLI on `PATH`, authenticated (the
+  [`claude`](https://docs.anthropic.com/en/docs/claude-cli) CLI by default).
 
 ## Installation
 
@@ -78,7 +80,7 @@ add it to your `load-path`:
 
 | Key | Action                              |
 |-----|-------------------------------------|
-| `c` | Open Claude in the project vterm    |
+| `c` | Open the LLM session in the project vterm |
 | `v` | Vterm in project                    |
 | `p` | Prompt buffer                       |
 | `P` | Inline prompt (bubble)              |
@@ -88,7 +90,7 @@ add it to your `load-path`:
 | `?` | Describe symbol/region at point     |
 | `f` / `t` | Add FIXME / TODO at point     |
 | `F` / `T` | List FIXMEs / TODOs           |
-| `S` / `D` | Send FIXMEs / TODOs to Claude |
+| `S` / `D` | Send FIXMEs / TODOs to the LLM |
 | `G` | Grep TODO/FIXME/HACK/XXX            |
 
 The `-m` (model), `-e` (effort), `-d` (skip permissions), `-c` (current dir),
@@ -106,16 +108,16 @@ and `-b` (`/btw` prefix) switches apply to the launched command.
 
 | Command                          | Purpose                                        |
 |----------------------------------|------------------------------------------------|
-| `agnostic-llm`                   | Open / reuse the project's `claude` vterm      |
+| `agnostic-llm`                   | Open / reuse the project's session vterm       |
 | `agnostic-llm-menu`              | Transient menu of all commands                 |
 | `agnostic-llm-prompt`            | Multi-line prompt buffer (`C-u`: bubble)       |
 | `agnostic-llm-prompt-bubble`     | Inline streaming bubble                        |
 | `agnostic-llm-prompt-history`    | Browse saved prompts                           |
 | `agnostic-llm-prompt-resume`     | Re-open the most recent prompt                 |
 | `agnostic-llm-show-last-response`| Render the latest assistant turn               |
-| `agnostic-llm-describe-at-point` | Ask Claude about the symbol/region at point    |
-| `agnostic-llm-switch-buffer`     | Switch between claude buffers                  |
-| `agnostic-llm-next/previous-buffer` | Cycle claude buffers                        |
+| `agnostic-llm-describe-at-point` | Ask the LLM about the symbol/region at point   |
+| `agnostic-llm-switch-buffer`     | Switch between LLM buffers                      |
+| `agnostic-llm-next/previous-buffer` | Cycle LLM buffers                           |
 | `agnostic-llm-toggle-vterm-session` | Toggle `*vterm:*` ↔ `*llm:*`       |
 | `agnostic-llm-set-default-model` | Persist the default model                      |
 | `agnostic-llm-add-fixme` / `-todo`  | Annotate at point                           |
@@ -123,15 +125,26 @@ and `-b` (`/btw` prefix) switches apply to the launched command.
 ## Configuration
 
 ```elisp
-;; Default model (nil = claude picks). Set from the menu with M, or:
+;; Default model (nil = the CLI picks). Set from the menu with M, or:
 (setq agnostic-llm-model "claude-sonnet-4-6")
 
-;; Teach the package about new models and their effort levels as they
-;; ship. Entries are newest-first; the first stands in for claude's
-;; default. Every entry must declare its own :efforts; there is no
-;; fallback, so an entry without it offers no effort choices.
-(add-to-list 'agnostic-llm-models
-             '("claude-opus-5" :efforts ("default" "low" "medium" "high" "max" "ultracode")))
+;; CLI-specific settings live in a provider plist; `claude' is the default.
+;; Add a model to the claude provider (newest-first; first = CLI default;
+;; each entry needs its own :efforts, no fallback):
+(push '("claude-opus-5" :efforts ("default" "low" "medium" "high" "max" "ultracode"))
+      (plist-get (alist-get 'claude agnostic-llm-providers) :models))
+
+;; Drive a different agentic CLI: register a provider and select it.
+(add-to-list 'agnostic-llm-providers
+             '(codex
+               :executable "codex"     :continue-flag "--continue"
+               :print-flag "-p"        :model-flag    "--model"
+               :effort-flag "--effort" :session-id-flag "--session"
+               :resume-flag "--resume" :dangerous-flag  "--yolo"
+               :session-dir "~/.codex/sessions/"
+               :session-file-regexp "\\.jsonl\\'" :model-prefix ""
+               :models (("gpt-5" :efforts ("default")))))
+(setq agnostic-llm-provider 'codex)
 
 ;; Files/dirs that mark a project root.
 (setq agnostic-llm-project-root-markers '(".git" ".claude" "CLAUDE.md"))

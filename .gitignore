@@ -7,3 +7,4 @@
 .project/
 .llm/
 .agnostic-llm/
+/.claude/

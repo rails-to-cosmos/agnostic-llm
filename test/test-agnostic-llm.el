@@ -86,8 +86,19 @@ session keeps its persistence anchored to the directory it launched in."
     ("claude-opus-4-6"  . (:efforts ("default" "low" "medium" "high" "max")))
     ("claude-sonnet-4-6" . (:efforts ("default" "low" "medium" "high" "max")))
     ("claude-haiku-4-5" . (:efforts ("default" "low" "medium" "high" "max"))))
-  "Fixture table mirroring the shipped `agnostic-llm-models' default.
+  "Fixture table mirroring the shipped provider `:models' default.
 Every entry declares its own `:efforts'; there is no fallback.")
+
+(defmacro test-agnostic-llm--with-models (models &rest body)
+  "Evaluate BODY with the active provider's catalog bound to MODELS.
+Installs a throwaway provider carrying MODELS and the \"claude-\" model
+prefix, so model/effort resolution reads MODELS instead of the shipped
+default."
+  (declare (indent 1))
+  `(let ((agnostic-llm-provider 'test)
+         (agnostic-llm-providers
+          (list (cons 'test (list :model-prefix "claude-" :models ,models)))))
+     ,@body))
 
 (ert-deftest test-model-split-alias ()
   "A bare alias splits to (FAMILY ()) with no version."
@@ -116,32 +127,32 @@ minor version."
 
 (ert-deftest test-effort-exact-name-has-ultracode ()
   "An exact name with declared efforts offers `ultracode'."
-  (let ((agnostic-llm-models test-agnostic-llm--models))
+  (test-agnostic-llm--with-models test-agnostic-llm--models
     (should (member "ultracode"
                     (agnostic-llm-effort-choices-for-model "claude-opus-4-8")))))
 
 (ert-deftest test-effort-per-model-explicit ()
   "A model returns its own declared efforts; a non-ultracode model omits it."
-  (let ((agnostic-llm-models test-agnostic-llm--models))
+  (test-agnostic-llm--with-models test-agnostic-llm--models
     (let ((choices (agnostic-llm-effort-choices-for-model "claude-opus-4-6")))
       (should-not (member "ultracode" choices))
       (should (equal choices '("default" "low" "medium" "high" "max"))))))
 
 (ert-deftest test-effort-bare-alias-newest ()
   "A bare alias resolves to the newest family entry (here, with `ultracode')."
-  (let ((agnostic-llm-models test-agnostic-llm--models))
+  (test-agnostic-llm--with-models test-agnostic-llm--models
     (should (member "ultracode"
                     (agnostic-llm-effort-choices-for-model "opus")))))
 
 (ert-deftest test-effort-bare-alias-lower-versions-explicit ()
   "A bare alias resolves to its family's newest entry and its declared efforts."
-  (let ((agnostic-llm-models test-agnostic-llm--models))
+  (test-agnostic-llm--with-models test-agnostic-llm--models
     (should (equal (agnostic-llm-effort-choices-for-model "haiku")
                    '("default" "low" "medium" "high" "max")))))
 
 (ert-deftest test-effort-date-suffix-resolves ()
   "A date-suffixed id resolves to its base entry and its declared efforts."
-  (let ((agnostic-llm-models test-agnostic-llm--models))
+  (test-agnostic-llm--with-models test-agnostic-llm--models
     (should (equal (agnostic-llm-effort-choices-for-model
                     "claude-haiku-4-5-20251001")
                    '("default" "low" "medium" "high" "max")))))
@@ -150,34 +161,101 @@ minor version."
   "A dated snapshot of a single-integer-version model keeps its efforts.
 The date must not be read as a minor version, else \"claude-sonnet-5-20260301\"
 would fail to match \"claude-sonnet-5\" and silently lose \"ultracode\"."
-  (let ((agnostic-llm-models test-agnostic-llm--models))
+  (test-agnostic-llm--with-models test-agnostic-llm--models
     (should (member "ultracode"
                     (agnostic-llm-effort-choices-for-model
                      "claude-sonnet-5-20260301")))))
 
 (ert-deftest test-effort-nil-model-is-first-entry ()
   "Nil model resolves to the first table entry (offers `ultracode' here)."
-  (let ((agnostic-llm-models test-agnostic-llm--models))
+  (test-agnostic-llm--with-models test-agnostic-llm--models
     (should (member "ultracode"
                     (agnostic-llm-effort-choices-for-model nil)))))
 
 (ert-deftest test-effort-unknown-model-nil ()
   "An unknown model has no declared efforts, so lookup returns nil."
-  (let ((agnostic-llm-models test-agnostic-llm--models))
+  (test-agnostic-llm--with-models test-agnostic-llm--models
     (should-not (agnostic-llm-effort-choices-for-model "claude-mystery-9"))))
 
 (ert-deftest test-effort-entry-without-efforts-nil ()
   "A known entry that declares no `:efforts' yields nil; there is no fallback."
-  (let ((agnostic-llm-models '(("claude-bare-1"))))
+  (test-agnostic-llm--with-models '(("claude-bare-1"))
     (should-not (agnostic-llm-effort-choices-for-model "claude-bare-1"))))
 
 (ert-deftest test-model-choices-order ()
   "`agnostic-llm-model-choices' returns the table names in order."
-  (let ((agnostic-llm-models test-agnostic-llm--models))
+  (test-agnostic-llm--with-models test-agnostic-llm--models
     (should (equal (agnostic-llm-model-choices)
                    '("claude-fable-5" "claude-sonnet-5" "claude-opus-4-8"
                      "claude-opus-4-7" "claude-opus-4-6" "claude-sonnet-4-6"
                      "claude-haiku-4-5")))))
+
+;; ---------------------------------------------------------------------------
+;; Provider abstraction
+;; ---------------------------------------------------------------------------
+
+(defmacro test-agnostic-llm--with-provider (plist &rest body)
+  "Evaluate BODY with a throwaway active provider carrying PLIST."
+  (declare (indent 1))
+  `(let ((agnostic-llm-provider 'test)
+         (agnostic-llm-providers (list (cons 'test ,plist))))
+     ,@body))
+
+(ert-deftest test-default-provider-is-claude ()
+  "The shipped default provider drives the claude CLI."
+  (should (eq agnostic-llm-provider 'claude))
+  (should (equal (agnostic-llm--provider-get :executable) "claude")))
+
+(ert-deftest test-provider-get-reads-active-entry ()
+  "`agnostic-llm--provider-get' reads a field from the active provider."
+  (test-agnostic-llm--with-provider '(:executable "codex" :print-flag "-q")
+    (should (equal (agnostic-llm--provider-get :executable) "codex"))
+    (should (equal (agnostic-llm--provider-get :print-flag) "-q"))))
+
+(ert-deftest test-provider-unknown-signals ()
+  "An unknown active provider signals an error."
+  (let ((agnostic-llm-provider 'nope)
+        (agnostic-llm-providers nil))
+    (should-error (agnostic-llm--provider))))
+
+(ert-deftest test-bubble-command-uses-provider-flags ()
+  "The bubble argv is built from the provider's executable and flags."
+  (test-agnostic-llm--with-provider
+      (list :executable "codex" :session-id-flag "--sid"
+            :model-flag "--model" :dangerous-flag "--yolo" :print-flag "-q")
+    (let ((agnostic-llm--bubble-session-id "ABC")
+          (agnostic-llm--bubble-model nil)
+          (agnostic-llm--bubble-dangerous nil)
+          (agnostic-llm-bubble-prompt-prefix ""))
+      (should (equal (agnostic-llm--bubble-command "hi")
+                     '("codex" "--sid" "ABC" "-q" "hi"))))))
+
+(ert-deftest test-session-shell-command-uses-provider-executable ()
+  "A fresh session's shell command is the provider executable plus set flags."
+  (let ((dir (make-temp-file "agnostic-llm-test-" t)))
+    (unwind-protect
+        (test-agnostic-llm--with-provider
+            (list :executable "codex" :continue-flag "-c"
+                  :model-flag "--model" :effort-flag "--effort"
+                  :dangerous-flag "--yolo"
+                  :session-dir (file-name-as-directory dir)
+                  :session-file-regexp "\\.jsonl\\'")
+          (let ((default-directory (file-name-as-directory dir))
+                (agnostic-llm-model nil)
+                (agnostic-llm-effort nil)
+                (agnostic-llm-dangerously-skip-permissions nil))
+            (should (equal (agnostic-llm--session-shell-command dir) "codex"))
+            (let ((agnostic-llm-model "m")
+                  (agnostic-llm-dangerously-skip-permissions t))
+              (should (equal (agnostic-llm--session-shell-command dir)
+                             "codex --model m --yolo")))))
+      (delete-directory dir t))))
+
+(ert-deftest test-session-dir-encodes-under-provider-root ()
+  "`agnostic-llm--session-dir' encodes the project dir under `:session-dir'."
+  (test-agnostic-llm--with-provider '(:session-dir "/store/")
+    (should (equal (agnostic-llm--session-dir "/home/u/proj")
+                   (expand-file-name "-home-u-proj" "/store/")))))
 
 ;; ---------------------------------------------------------------------------
 ;; Session buffer naming
