@@ -54,8 +54,7 @@ own config:
        :branch "master" :rev :newest)
   :bind (("C-x y e" . agnostic-llm-menu)
          ("C-S-j"   . agnostic-llm-next-buffer)
-         ("C-S-k"   . agnostic-llm-previous-buffer)
-         ("C-x C-x" . agnostic-llm-toggle-vterm-session))
+         ("C-S-k"   . agnostic-llm-previous-buffer))
   :config
   (with-eval-after-load 'vterm
     (define-key vterm-mode-map (kbd "C-c C-r")
@@ -116,7 +115,6 @@ and `-b` (`/btw` prefix) switches apply to the launched command.
 | `agnostic-llm-describe-at-point` | Ask Claude about the symbol/region at point    |
 | `agnostic-llm-switch-buffer`     | Switch between claude buffers                  |
 | `agnostic-llm-next/previous-buffer` | Cycle claude buffers                        |
-| `agnostic-llm-toggle-vterm-session` | Toggle `*vterm:*` ↔ `*llm:*`       |
 | `agnostic-llm-set-default-model` | Persist the default model                      |
 | `agnostic-llm-add-fixme` / `-todo`  | Annotate at point                           |
 

@@ -326,10 +326,9 @@ backend.")
 (defun agnostic-llm--session-buffer-name (label)
   "Return the agent session vterm buffer name for project LABEL.
 Single source of truth for the `*llm:PROJECT*' buffer name, shared
-by `agnostic-llm', `agnostic-llm--bubble-promote', and
-`agnostic-llm-toggle-vterm-session'.  The prefix comes from
-`agnostic-llm--session-buffer-prefix', which the active backend supplies
-once the backends in docs/multi-backend-design.org exist."
+by `agnostic-llm' and `agnostic-llm--bubble-promote'.  The prefix comes
+from `agnostic-llm--session-buffer-prefix', which the active backend
+supplies once the backends in docs/multi-backend-design.org exist."
   (format "%s%s*" agnostic-llm--session-buffer-prefix label))
 
 (defun agnostic-llm--claude-session-dir (dir)
@@ -1678,38 +1677,6 @@ current project; the header highlights the override."
     ("h" "Clear revert highlights" agnostic-llm-change-highlight-clear)]]
   (interactive)
   (transient-setup 'agnostic-llm-menu nil nil :scope (list :root root :label label)))
-
-;;;###autoload
-(defun agnostic-llm-toggle-vterm-session ()
-  "Toggle current window between `*vterm:PROJECT*' and `*llm:PROJECT*'.
-Switches to the counterpart of the current buffer, creating it in the
-current window if missing.  When the current buffer is neither, jump
-to the project's vterm first (reusing or spawning)."
-  (interactive)
-  (let* ((name (buffer-name))
-         ;; Derive the session prefix's kind from the single source of
-         ;; truth so this predicate tracks `agnostic-llm--session-buffer-name'.
-         (session-kind (substring agnostic-llm--session-buffer-prefix 1 -1))
-         (re (format "\\`\\*\\(vterm\\|%s\\):\\(.*\\)\\*\\'"
-                     (regexp-quote session-kind))))
-    (if (string-match re name)
-        (let* ((kind   (match-string 1 name))
-               (label  (match-string 2 name))
-               (target (if (equal kind "vterm")
-                           (agnostic-llm--session-buffer-name label)
-                         (format "*vterm:%s*" label)))
-               (existing (get-buffer target)))
-          (if (buffer-live-p existing)
-              (switch-to-buffer existing)
-            (pcase-let* ((`(,_ . ,root) (agnostic-llm--project-label default-directory))
-                         (default-directory (or root default-directory)))
-              (if (equal kind "vterm")
-                  (let ((vterm-shell (agnostic-llm--claude-shell-command root)))
-                    (vterm target)
-                    (agnostic-llm--register-buffer (current-buffer)))
-                (vterm target)))))
-      (let ((current-prefix-arg nil))
-        (agnostic-llm-vterm-here)))))
 
 ;;;###autoload
 (defun agnostic-llm-describe-at-point ()
