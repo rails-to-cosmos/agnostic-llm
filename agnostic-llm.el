@@ -3,8 +3,8 @@
 ;; Copyright (c) 2026 Dmitry Akatov
 ;; Author: Dmitry Akatov <dmitry.akatov@protonmail.com>
 ;; URL: https://github.com/rails-to-cosmos/agnostic-llm
-;; Package-Version: 0.5.0.0.20260717.0
-;; Package-Requires: ((emacs "28.1") (transient "0.4.0") (vterm "0.0.2"))
+;; Package-Version: 0.6.0.0.20260724.0
+;; Package-Requires: ((emacs "28.1") (transient "0.4.0") (cond-let "0") (vterm "0.0.2"))
 ;; Keywords: convenience, tools
 
 ;;; Commentary:
