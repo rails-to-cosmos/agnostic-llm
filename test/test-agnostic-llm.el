@@ -81,6 +81,7 @@ session keeps its persistence anchored to the directory it launched in."
 (defconst test-agnostic-llm--models
   '(("claude-fable-5"   . (:efforts ("default" "low" "medium" "high" "max" "ultracode")))
     ("claude-sonnet-5"  . (:efforts ("default" "low" "medium" "high" "max" "ultracode")))
+    ("claude-opus-5"    . (:efforts ("default" "low" "medium" "high" "max" "ultracode")))
     ("claude-opus-4-8"  . (:efforts ("default" "low" "medium" "high" "max" "ultracode")))
     ("claude-opus-4-7"  . (:efforts ("default" "low" "medium" "high" "max")))
     ("claude-opus-4-6"  . (:efforts ("default" "low" "medium" "high" "max")))
@@ -186,9 +187,9 @@ would fail to match \"claude-sonnet-5\" and silently lose \"ultracode\"."
   "`agnostic-llm-model-choices' returns the table names in order."
   (test-agnostic-llm--with-models test-agnostic-llm--models
     (should (equal (agnostic-llm-model-choices)
-                   '("claude-fable-5" "claude-sonnet-5" "claude-opus-4-8"
-                     "claude-opus-4-7" "claude-opus-4-6" "claude-sonnet-4-6"
-                     "claude-haiku-4-5")))))
+                   '("claude-fable-5" "claude-sonnet-5" "claude-opus-5"
+                     "claude-opus-4-8" "claude-opus-4-7" "claude-opus-4-6"
+                     "claude-sonnet-4-6" "claude-haiku-4-5")))))
 
 ;; ---------------------------------------------------------------------------
 ;; Provider abstraction

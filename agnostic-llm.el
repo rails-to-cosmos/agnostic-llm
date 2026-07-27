@@ -3,7 +3,7 @@
 ;; Copyright (c) 2026 Dmitry Akatov
 ;; Author: Dmitry Akatov <dmitry.akatov@protonmail.com>
 ;; URL: https://github.com/rails-to-cosmos/agnostic-llm
-;; Package-Version: 0.6.0.0.20260724.0
+;; Package-Version: 0.7.0.0.20260727.0
 ;; Package-Requires: ((emacs "28.1") (transient "0.4.0") (cond-let "0") (vterm "0.0.2"))
 ;; Keywords: convenience, tools
 
@@ -85,6 +85,7 @@ Default `claude' drives the Claude CLI."
      :models
      (("claude-fable-5"    . (:efforts ("default" "low" "medium" "high" "max" "ultracode")))
       ("claude-sonnet-5"   . (:efforts ("default" "low" "medium" "high" "max" "ultracode")))
+      ("claude-opus-5"     . (:efforts ("default" "low" "medium" "high" "max" "ultracode")))
       ("claude-opus-4-8"   . (:efforts ("default" "low" "medium" "high" "max" "ultracode")))
       ("claude-opus-4-7"   . (:efforts ("default" "low" "medium" "high" "max")))
       ("claude-opus-4-6"   . (:efforts ("default" "low" "medium" "high" "max")))
