@@ -3,7 +3,7 @@
 ;; Copyright (c) 2026 Dmitry Akatov
 ;; Author: Dmitry Akatov <dmitry.akatov@protonmail.com>
 ;; URL: https://github.com/rails-to-cosmos/agnostic-llm
-;; Package-Version: 0.7.0.0.20260727.0
+;; Package-Version: 0.7.0.1.20260911.0
 ;; Package-Requires: ((emacs "28.1") (transient "0.4.0") (cond-let "0") (vterm "0.0.2"))
 ;; Keywords: convenience, tools
 
@@ -134,6 +134,35 @@ Signals an error when `agnostic-llm-provider' names no entry in
   (agnostic-llm--provider-get :models))
 
 ;;; Project Root Detection
+
+(defcustom agnostic-llm-shell (or (getenv "SHELL") shell-file-name)
+  "Shell that execs the provider CLI, so its rc files set PATH and credentials.
+Runs as `SHELL ARGS \"exec CLI...\"' with `agnostic-llm-shell-args'; nil runs
+the CLI under Emacs's own environment."
+  :type '(choice (const :tag "Emacs environment" nil) string)
+  :group 'agnostic-llm)
+
+(defcustom agnostic-llm-shell-args '("-l" "-i" "-c")
+  "Arguments to `agnostic-llm-shell' before the `exec CLI...' command string."
+  :type '(repeat string)
+  :group 'agnostic-llm)
+
+(defun agnostic-llm--shell-argv (command)
+  "Argv that execs shell COMMAND through `agnostic-llm-shell', else `sh -c'."
+  (if agnostic-llm-shell
+      `(,agnostic-llm-shell ,@agnostic-llm-shell-args ,(concat "exec " command))
+    (list "sh" "-c" command)))
+
+(defun agnostic-llm--shell-wrap (command)
+  "Shell COMMAND wrapped for `vterm-shell': its `agnostic-llm--shell-argv', quoted."
+  (mapconcat #'shell-quote-argument (agnostic-llm--shell-argv command) " "))
+
+(defun agnostic-llm--open-vterm (name command &optional same-window)
+  "Open a registered LLM vterm NAME running COMMAND via `agnostic-llm--shell-wrap'.
+Pops to another window unless SAME-WINDOW."
+  (let ((vterm-shell (agnostic-llm--shell-wrap command)))
+    (if same-window (vterm name) (vterm-other-window name))
+    (agnostic-llm--register-buffer (current-buffer))))
 
 (defcustom agnostic-llm-project-root-markers '(".git" ".claude" "CLAUDE.md")
   "Files/dirs that indicate a project root."
@@ -591,19 +620,14 @@ With \\[universal-argument] \\[universal-argument]: new buffer, fresh session."
                (pop-to-buffer existing))
               (t
                (when existing (kill-buffer existing))
-               (let ((vterm-shell (agnostic-llm--session-shell-command root)))
-                 (vterm-other-window base)
-                 (agnostic-llm--register-buffer (current-buffer)))))))
+               (agnostic-llm--open-vterm
+                base (agnostic-llm--session-shell-command root))))))
           ((= prefix 4)
-           (let ((vterm-shell (agnostic-llm--session-shell-command root))
-                 (name (generate-new-buffer-name base)))
-             (vterm-other-window name)
-             (agnostic-llm--register-buffer (current-buffer))))
+           (agnostic-llm--open-vterm (generate-new-buffer-name base)
+                                     (agnostic-llm--session-shell-command root)))
           ((>= prefix 16)
-           (let ((vterm-shell (agnostic-llm--provider-get :executable))
-                 (name (generate-new-buffer-name base)))
-             (vterm-other-window name)
-             (agnostic-llm--register-buffer (current-buffer)))))
+           (agnostic-llm--open-vterm (generate-new-buffer-name base)
+                                     (agnostic-llm--provider-get :executable))))
     ;; A session launched with an explicit USER-ROOT pins its persistence and
     ;; scope to that directory: `agnostic-llm--project-root' in this vterm now
     ;; returns USER-ROOT instead of walking up to an ancestor project marker.
@@ -951,21 +975,21 @@ to one session.  Promote spawns a fresh interactive CLI with `:resume-flag'
          (model     agnostic-llm--bubble-model)
          (bubble    (current-buffer)))
     (kill-buffer bubble)
-    (let ((default-directory dir)
-          (vterm-shell (format "%s %s %s%s%s"
-                               (agnostic-llm--provider-get :executable)
-                               (agnostic-llm--provider-get :resume-flag)
-                               (shell-quote-argument sid)
-                               (if model
-                                   (format " %s %s"
-                                           (agnostic-llm--provider-get :model-flag)
-                                           (shell-quote-argument model))
-                                 "")
-                               (if dangerous
-                                   (concat " " (agnostic-llm--provider-get :dangerous-flag))
-                                 ""))))
-      (vterm-other-window name)
-      (agnostic-llm--register-buffer (current-buffer)))))
+    (let ((default-directory dir))
+      (agnostic-llm--open-vterm
+       name
+       (format "%s %s %s%s%s"
+               (agnostic-llm--provider-get :executable)
+               (agnostic-llm--provider-get :resume-flag)
+               (shell-quote-argument sid)
+               (if model
+                   (format " %s %s"
+                           (agnostic-llm--provider-get :model-flag)
+                           (shell-quote-argument model))
+                 "")
+               (if dangerous
+                   (concat " " (agnostic-llm--provider-get :dangerous-flag))
+                 ""))))))
 
 ;;;###autoload
 (defun agnostic-llm-prompt-bubble ()
@@ -1023,7 +1047,9 @@ so only the response is rendered."
       (setq header-line-format
             (propertize " LLM  (running — C-c C-k cancel)"
                         'face 'agnostic-llm-bubble-header-face)))
-    (let* ((args (agnostic-llm--bubble-command prompt))
+    (let* ((args (agnostic-llm--shell-argv
+                  (mapconcat #'shell-quote-argument
+                             (agnostic-llm--bubble-command prompt) " ")))
            (process-environment
             (append '("NO_COLOR=1" "CLICOLOR=0" "TERM=dumb")
                     process-environment))
@@ -1766,9 +1792,8 @@ to the project's vterm first (reusing or spawning)."
             (pcase-let* ((`(,_ . ,root) (agnostic-llm--project-label default-directory))
                          (default-directory (or root default-directory)))
               (if (equal kind "vterm")
-                  (let ((vterm-shell (agnostic-llm--session-shell-command root)))
-                    (vterm target)
-                    (agnostic-llm--register-buffer (current-buffer)))
+                  (agnostic-llm--open-vterm
+                   target (agnostic-llm--session-shell-command root) t)
                 (vterm target)))))
       (let ((current-prefix-arg nil))
         (agnostic-llm-vterm-here)))))

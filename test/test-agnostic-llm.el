@@ -252,6 +252,20 @@ would fail to match \"claude-sonnet-5\" and silently lose \"ultracode\"."
                              "codex --model m --yolo")))))
       (delete-directory dir t))))
 
+(ert-deftest test-shell-argv-execs-through-user-shell ()
+  "The CLI command is exec'd through `agnostic-llm-shell' with its args."
+  (let ((agnostic-llm-shell "/bin/zsh")
+        (agnostic-llm-shell-args '("-l" "-i" "-c")))
+    (should (equal (agnostic-llm--shell-argv "codex -c")
+                   '("/bin/zsh" "-l" "-i" "-c" "exec codex -c")))
+    (should (equal (agnostic-llm--shell-wrap "codex -c")
+                   "/bin/zsh -l -i -c exec\\ codex\\ -c"))))
+
+(ert-deftest test-shell-argv-nil-shell-runs-plain ()
+  "With `agnostic-llm-shell' nil the command runs under plain `sh -c'."
+  (let ((agnostic-llm-shell nil))
+    (should (equal (agnostic-llm--shell-argv "codex") '("sh" "-c" "codex")))))
+
 (ert-deftest test-session-dir-encodes-under-provider-root ()
   "`agnostic-llm--session-dir' encodes the project dir under `:session-dir'."
   (test-agnostic-llm--with-provider '(:session-dir "/store/")
