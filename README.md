@@ -8,10 +8,10 @@ per-project terminal sessions, a prompt buffer with `@file` completion, an
 inline streaming "bubble", a response viewer, and a FIXME/TODO annotation
 system — all under a [`transient`](https://github.com/magit/transient) menu.
 
-Provider-agnostic: the executable, flags, session-store layout, and
-model/effort catalog live in `agnostic-llm-providers`, keyed by
-`agnostic-llm-provider`. `claude` is the default; add an entry to drive
-another agentic CLI (codex, gemini, ...). Roadmap in
+Provider-agnostic: the executable, commands, session-store layout, response
+parser, and model/effort catalog live in `agnostic-llm-providers`, keyed by
+`agnostic-llm-provider`. Claude Code and OpenAI Codex are built in; `claude`
+is the default. Roadmap in
 [`docs/multi-backend-design.org`](docs/multi-backend-design.org).
 
 ## Features
@@ -34,6 +34,9 @@ another agentic CLI (codex, gemini, ...). Roadmap in
   listable per project, and hand the whole set back to the LLM to resolve.
 - **Model / effort switches** — pick the model and reasoning effort per
   invocation from the menu, or set a persistent default.
+- **Native Codex integration** — interactive sessions use `codex resume
+  --last`, bubbles use resumable `codex exec --json` threads, and the response
+  viewer reads Codex rollout JSONL by project.
 
 ## Requirements
 
@@ -41,7 +44,9 @@ another agentic CLI (codex, gemini, ...). Roadmap in
 - [`vterm`](https://github.com/akermu/emacs-libvterm) and
   [`transient`](https://github.com/magit/transient)
 - The active provider's CLI on `PATH`, authenticated (the
-  [`claude`](https://docs.anthropic.com/en/docs/claude-cli) CLI by default).
+  [`claude`](https://docs.anthropic.com/en/docs/claude-cli) CLI by default, or
+  the [Codex CLI](https://learn.chatgpt.com/docs/codex/cli) for the `codex`
+  provider).
 
 ## Installation
 
@@ -86,6 +91,7 @@ add it to your `load-path`:
 | `P` | Inline prompt (bubble)              |
 | `r` | Resume last prompt                  |
 | `H` | Prompt history                      |
+| `B` | Select and persist provider         |
 | `R` | Show last response                  |
 | `?` | Describe symbol/region at point     |
 | `f` / `t` | Add FIXME / TODO at point     |
@@ -128,26 +134,22 @@ and `-b` (`/btw` prefix) switches apply to the launched command.
 ;; Default model (nil = the CLI picks). Set from the menu with M, or:
 (setq agnostic-llm-model "claude-sonnet-4-6")
 
+;; Pick one of the built-in providers (also available as menu command B).
+(setq agnostic-llm-provider 'codex) ; or 'claude
+
+;; Codex defaults to the model configured by the CLI. Optional overrides:
+(setq agnostic-llm-model "gpt-5.6-terra")
+(setq agnostic-llm-effort "medium")
+
 ;; CLI-specific settings live in a provider plist; `claude' is the default.
 ;; Add a model to the claude provider (newest-first; first = CLI default;
 ;; each entry needs its own :efforts, no fallback):
 (push '("claude-opus-5" :efforts ("default" "low" "medium" "high" "max" "ultracode"))
       (plist-get (alist-get 'claude agnostic-llm-providers) :models))
 
-;; Drive a different agentic CLI: register a provider and select it.
-(add-to-list 'agnostic-llm-providers
-             '(codex
-               :executable "codex"     :continue-flag "--continue"
-               :print-flag "-p"        :model-flag    "--model"
-               :effort-flag "--effort" :session-id-flag "--session"
-               :resume-flag "--resume" :dangerous-flag  "--yolo"
-               :session-dir "~/.codex/sessions/"
-               :session-file-regexp "\\.jsonl\\'" :model-prefix ""
-               :models (("gpt-5" :efforts ("default")))))
-(setq agnostic-llm-provider 'codex)
-
 ;; Files/dirs that mark a project root.
-(setq agnostic-llm-project-root-markers '(".git" ".claude" "CLAUDE.md"))
+(setq agnostic-llm-project-root-markers
+      '(".git" ".claude" "CLAUDE.md" ".codex" "AGENTS.md"))
 
 ;; Where prompt history and annotations live:
 ;;   'project -> .agnostic-llm/ inside the repo (.gitignore auto-appended)

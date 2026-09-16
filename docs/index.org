@@ -6,7 +6,6 @@ other; start here and follow the links.
 
 * Documents
 
-- [[file:multi-backend-design.org][Multi-backend design]] — how to drive any agentic CLI
-  (codex, gemini, opencode, aider, ...) from the same UX. =claude= is
-  the first backend; this note proposes the backend abstraction and a
-  phased migration toward it.
+- [[file:multi-backend-design.org][Multi-backend design]] — the original design
+  and migration notes for driving multiple agentic CLIs. Claude Code and
+  OpenAI Codex are now built-in providers.

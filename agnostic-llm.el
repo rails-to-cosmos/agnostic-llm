@@ -3,8 +3,8 @@
 ;; Copyright (c) 2026 Dmitry Akatov
 ;; Author: Dmitry Akatov <dmitry.akatov@protonmail.com>
 ;; URL: https://github.com/rails-to-cosmos/agnostic-llm
-;; Package-Version: 0.7.0.1.20260911.0
-;; Package-Requires: ((emacs "28.1") (transient "0.4.0") (cond-let "0") (vterm "0.0.2"))
+;; Package-Version: 0.8.0.0.20260916.0
+;; Package-Requires: ((emacs "28.1") (transient "0.4.0") (vterm "0.0.2"))
 ;; Keywords: convenience, tools
 
 ;;; Commentary:
@@ -65,8 +65,11 @@
 
 (defcustom agnostic-llm-provider 'claude
   "Symbol selecting the active entry in `agnostic-llm-providers'.
-Default `claude' drives the Claude CLI."
-  :type 'symbol
+The built-in choices are `claude' and `codex'.  Default `claude' drives
+the Claude CLI."
+  :type '(choice (const :tag "Claude Code" claude)
+                 (const :tag "OpenAI Codex" codex)
+                 (symbol :tag "Other registered provider"))
   :group 'agnostic-llm)
 
 (defcustom agnostic-llm-providers
@@ -90,7 +93,26 @@ Default `claude' drives the Claude CLI."
       ("claude-opus-4-7"   . (:efforts ("default" "low" "medium" "high" "max")))
       ("claude-opus-4-6"   . (:efforts ("default" "low" "medium" "high" "max")))
       ("claude-sonnet-4-6" . (:efforts ("default" "low" "medium" "high" "max")))
-      ("claude-haiku-4-5"  . (:efforts ("default" "low" "medium" "high" "max"))))))
+      ("claude-haiku-4-5"  . (:efforts ("default" "low" "medium" "high" "max")))))
+    (codex
+     :executable          "codex"
+     :continue-flag       "resume --last"
+     :print-flag          "exec"
+     :model-flag          "--model"
+     :dangerous-flag      "--dangerously-bypass-approvals-and-sandbox"
+     :session-dir         "~/.codex/sessions/"
+     :session-file-regexp "rollout-.*\\.jsonl\\'"
+     :model-prefix        ""
+     :session-command-function agnostic-llm--codex-session-command
+     :bubble-command-function  agnostic-llm--codex-bubble-command
+     :session-file-function    agnostic-llm--codex-session-file
+     :extract-response-function agnostic-llm--codex-extract-last-response
+     :bubble-json-events  t
+     :models
+     (("gpt-6-astra"   . (:efforts ("default" "low" "medium" "high" "xhigh" "max")))
+      ("gpt-5.6-sol"   . (:efforts ("default" "none" "low" "medium" "high" "xhigh" "max")))
+      ("gpt-5.6-terra" . (:efforts ("default" "none" "low" "medium" "high" "xhigh" "max")))
+      ("gpt-5.6-luna"  . (:efforts ("default" "none" "low" "medium" "high" "xhigh" "max"))))))
   "Registry of agentic-CLI providers, keyed by symbol.
 Each entry is (SYMBOL . PLIST); `agnostic-llm-provider' names the active
 one.  PLIST fields:
@@ -112,6 +134,12 @@ one.  PLIST fields:
   :models              catalog as (NAME . PLIST); each `:efforts' lists a
                        model's effort levels.  Newest-first; the first is
                        the CLI default.
+
+Providers whose CLI or session layout cannot be expressed by those simple
+fields may supply function symbols in `:session-command-function',
+`:bubble-command-function', `:session-file-function', and
+`:extract-response-function'.  `:bubble-json-events' selects the Codex-style
+JSONL event filter, which also learns the server-assigned session id.
 
 Add an entry and point `agnostic-llm-provider' at it to drive another CLI.
 See docs/multi-backend-design.org."
@@ -160,11 +188,14 @@ the CLI under Emacs's own environment."
 (defun agnostic-llm--open-vterm (name command &optional same-window)
   "Open a registered LLM vterm NAME running COMMAND via `agnostic-llm--shell-wrap'.
 Pops to another window unless SAME-WINDOW."
-  (let ((vterm-shell (agnostic-llm--shell-wrap command)))
+  (let ((vterm-shell (agnostic-llm--shell-wrap command))
+        (provider agnostic-llm-provider))
     (if same-window (vterm name) (vterm-other-window name))
+    (setq-local agnostic-llm-provider provider)
     (agnostic-llm--register-buffer (current-buffer))))
 
-(defcustom agnostic-llm-project-root-markers '(".git" ".claude" "CLAUDE.md")
+(defcustom agnostic-llm-project-root-markers
+  '(".git" ".claude" "CLAUDE.md" ".codex" "AGENTS.md")
   "Files/dirs that indicate a project root."
   :type '(repeat string)
   :group 'agnostic-llm)
@@ -429,31 +460,66 @@ claude's layout."
 
 (defun agnostic-llm--session-exists-p (dir)
   "Return non-nil if DIR has at least one recorded provider session."
-  (let ((sdir (agnostic-llm--session-dir dir)))
-    (and (file-directory-p sdir)
-         (directory-files sdir nil (agnostic-llm--provider-get :session-file-regexp) t))))
+  (if (agnostic-llm--provider-get :session-file-function)
+      (and (agnostic-llm--session-file dir) t)
+    (let ((sdir (agnostic-llm--session-dir dir)))
+      (and (file-directory-p sdir)
+           (directory-files sdir nil (agnostic-llm--provider-get :session-file-regexp) t)))))
 
-(defun agnostic-llm--session-shell-command (_root)
-  "Return the shell command launching the provider's interactive session.
+(defun agnostic-llm--shell-command-from-argv (argv)
+  "Return a safely shell-quoted command string for ARGV."
+  (mapconcat #'shell-quote-argument argv " "))
+
+(defun agnostic-llm--codex-option-args (model effort dangerous)
+  "Return Codex CLI arguments for MODEL, EFFORT, and DANGEROUS."
+  (append (when model (list "--model" model))
+          (when effort (list "-c" (format "model_reasoning_effort=%s" effort)))
+          (when dangerous
+            (list "--dangerously-bypass-approvals-and-sandbox"))))
+
+(defun agnostic-llm--codex-session-command (root fresh resume-id model effort dangerous)
+  "Build a Codex interactive command for ROOT.
+FRESH suppresses continuation; RESUME-ID selects one exact session.
+MODEL, EFFORT, and DANGEROUS control the corresponding Codex options."
+  (let* ((executable (agnostic-llm--provider-get :executable))
+         (base (cond
+               (resume-id (list executable "resume" resume-id))
+               (fresh (list executable))
+               ((agnostic-llm--codex-session-file root t)
+                (list executable "resume" "--last"))
+               (t (list executable)))))
+    (agnostic-llm--shell-command-from-argv
+     (append base (agnostic-llm--codex-option-args model effort dangerous)))))
+
+(defun agnostic-llm--session-shell-command (root &optional fresh resume-id)
+  "Return the shell command launching the provider in ROOT.
 Adds the `:continue-flag' when the current directory has a recorded
 session.  Appends `:model-flag', `:effort-flag', and `:dangerous-flag'
 when `agnostic-llm-model', `agnostic-llm-effort', and
-`agnostic-llm-dangerously-skip-permissions' are respectively set."
-  (let* ((exe  (agnostic-llm--provider-get :executable))
-         (base (if (agnostic-llm--session-exists-p default-directory)
-                   (concat exe " " (agnostic-llm--provider-get :continue-flag))
-                 exe))
-         (with-model (if agnostic-llm-model
-                         (concat base " " (agnostic-llm--provider-get :model-flag) " "
-                                 (shell-quote-argument agnostic-llm-model))
-                       base))
-         (with-effort (if agnostic-llm-effort
-                          (concat with-model " " (agnostic-llm--provider-get :effort-flag) " "
-                                  (shell-quote-argument agnostic-llm-effort))
-                        with-model)))
-    (if agnostic-llm-dangerously-skip-permissions
-        (concat with-effort " " (agnostic-llm--provider-get :dangerous-flag))
-      with-effort)))
+`agnostic-llm-dangerously-skip-permissions' are respectively set.  With
+FRESH, never continue; with RESUME-ID, resume that exact session."
+  (if-let ((builder (agnostic-llm--provider-get :session-command-function)))
+      (funcall builder root fresh resume-id agnostic-llm-model agnostic-llm-effort
+               agnostic-llm-dangerously-skip-permissions)
+    (let* ((exe (agnostic-llm--provider-get :executable))
+           (base (cond
+                  (resume-id
+                   (format "%s %s %s" exe (agnostic-llm--provider-get :resume-flag)
+                           (shell-quote-argument resume-id)))
+                  ((and (not fresh) (agnostic-llm--session-exists-p root))
+                   (concat exe " " (agnostic-llm--provider-get :continue-flag)))
+                  (t exe)))
+           (with-model (if agnostic-llm-model
+                           (concat base " " (agnostic-llm--provider-get :model-flag) " "
+                                   (shell-quote-argument agnostic-llm-model))
+                         base))
+           (with-effort (if agnostic-llm-effort
+                            (concat with-model " " (agnostic-llm--provider-get :effort-flag) " "
+                                    (shell-quote-argument agnostic-llm-effort))
+                          with-model)))
+      (if agnostic-llm-dangerously-skip-permissions
+          (concat with-effort " " (agnostic-llm--provider-get :dangerous-flag))
+        with-effort))))
 
 ;;; Show last response in a side buffer
 ;;
@@ -476,19 +542,53 @@ or display plumbing."
   :type 'function
   :group 'agnostic-llm)
 
+(defun agnostic-llm--codex-session-meta (file)
+  "Return (CWD . ORIGINATOR) from the metadata in Codex rollout FILE."
+  (with-temp-buffer
+    ;; `session_meta' is first and CWD precedes its potentially very large
+    ;; instruction payload, so avoid parsing/loading every rollout in full.
+    (insert-file-contents file nil 0 16384)
+    (when (re-search-forward
+           "\\\"type\\\":\\\"session_meta\\\".*?\\\"cwd\\\":\\\"\\([^\\\"]+\\)\\\".*?\\\"originator\\\":\\\"\\([^\\\"]+\\)\\\""
+           nil t)
+      (cons (replace-regexp-in-string "\\\\/" "/" (match-string-no-properties 1))
+            (match-string-no-properties 2)))))
+
+(defun agnostic-llm--codex-session-file (dir &optional interactive-only)
+  "Return the newest Codex rollout belonging to project DIR.
+With INTERACTIVE-ONLY, exclude sessions created by `codex exec'."
+  (let* ((root (expand-file-name (agnostic-llm--provider-get :session-dir)))
+         (wanted (file-name-as-directory (file-truename dir))))
+    (when (file-directory-p root)
+      (seq-find
+       (lambda (file)
+         (let* ((meta (agnostic-llm--codex-session-meta file))
+                (cwd (car meta))
+                (originator (cdr meta)))
+           (and cwd
+                (or (not interactive-only) (equal originator "codex-tui"))
+                (equal wanted (file-name-as-directory (file-truename cwd))))))
+       (sort (directory-files-recursively
+              root (agnostic-llm--provider-get :session-file-regexp))
+             (lambda (a b)
+               (time-less-p (file-attribute-modification-time (file-attributes b))
+                            (file-attribute-modification-time (file-attributes a)))))))))
+
 (defun agnostic-llm--session-file (dir)
   "Return the newest session transcript file for DIR, or nil if none.
 Files under `agnostic-llm--session-dir' matching `:session-file-regexp'
 are ranked by mtime, so the session the live CLI is appending wins (names
 are random UUIDs, so name order is meaningless)."
-  (let ((sdir (agnostic-llm--session-dir dir)))
-    (when (file-directory-p sdir)
-      (car (sort (directory-files sdir t (agnostic-llm--provider-get :session-file-regexp) t)
-                 (lambda (a b)
-                   (time-less-p (file-attribute-modification-time
-                                 (file-attributes b))
-                                (file-attribute-modification-time
-                                 (file-attributes a)))))))))
+  (if-let ((finder (agnostic-llm--provider-get :session-file-function)))
+      (funcall finder dir)
+    (let ((sdir (agnostic-llm--session-dir dir)))
+      (when (file-directory-p sdir)
+        (car (sort (directory-files sdir t (agnostic-llm--provider-get :session-file-regexp) t)
+                   (lambda (a b)
+                     (time-less-p (file-attribute-modification-time
+                                   (file-attributes b))
+                                  (file-attribute-modification-time
+                                   (file-attributes a))))))))))
 
 (defun agnostic-llm--session-records (file)
   "Parse FILE (JSONL) into a list of alists, in file order.
@@ -554,6 +654,30 @@ intentionally dropped — this is the prose reply."
     (when texts
       (string-trim (string-join (nreverse texts) "\n\n")))))
 
+(defun agnostic-llm--codex-extract-last-response (records)
+  "Return the latest assistant prose response from Codex RECORDS."
+  (catch 'response
+    (dolist (record (reverse records))
+      (let ((payload (alist-get 'payload record)))
+        (when (and (equal (alist-get 'type record) "response_item")
+                   (equal (alist-get 'type payload) "message")
+                   (equal (alist-get 'role payload) "assistant"))
+          (let (texts)
+            (dolist (block (alist-get 'content payload))
+              (when (equal (alist-get 'type block) "output_text")
+                (let ((text (alist-get 'text block)))
+                  (when (and (stringp text) (not (string-blank-p text)))
+                    (push text texts)))))
+            (when texts
+              (throw 'response
+                     (string-trim (string-join (nreverse texts) "\n\n"))))))))))
+
+(defun agnostic-llm--provider-extract-last-response (records)
+  "Extract the latest response from provider session RECORDS."
+  (if-let ((extractor (agnostic-llm--provider-get :extract-response-function)))
+      (funcall extractor records)
+    (agnostic-llm--extract-last-response records)))
+
 (defun agnostic-llm--render-response-plain (text)
   "Default renderer: insert TEXT verbatim as plain text.
 Current buffer is fresh and current; leaves it in `fundamental-mode'."
@@ -577,7 +701,8 @@ the top."
          (file  (agnostic-llm--session-file dir)))
     (unless file
       (user-error "No session found for %s" label))
-    (let ((response (agnostic-llm--extract-last-response (agnostic-llm--session-records file))))
+    (let ((response (agnostic-llm--provider-extract-last-response
+                     (agnostic-llm--session-records file))))
       (unless response
         (user-error "No assistant response found in latest turn"))
       (let ((buf (get-buffer-create (format "*llm-response:%s*" label))))
@@ -613,7 +738,22 @@ With \\[universal-argument] \\[universal-argument]: new buffer, fresh session."
                (base (agnostic-llm--session-buffer-name label))
                (prefix (prefix-numeric-value current-prefix-arg)))
     (cond ((= prefix 1)
-           (let ((existing (get-buffer base)))
+           (let* ((base-buffer (get-buffer base))
+                  (existing
+                   (or (and base-buffer
+                            (eq (buffer-local-value 'agnostic-llm-provider base-buffer)
+                                agnostic-llm-provider)
+                            base-buffer)
+                       (seq-find
+                        (lambda (buffer)
+                          (and (buffer-live-p buffer)
+                               (get-buffer-process buffer)
+                               (eq (buffer-local-value 'agnostic-llm-provider buffer)
+                                   agnostic-llm-provider)
+                               (file-equal-p
+                                (buffer-local-value 'default-directory buffer)
+                                default-directory)))
+                        (agnostic-llm--get-buffers)))))
              (cond
               ((and existing (buffer-live-p existing)
                     (get-buffer-process existing))
@@ -621,13 +761,14 @@ With \\[universal-argument] \\[universal-argument]: new buffer, fresh session."
               (t
                (when existing (kill-buffer existing))
                (agnostic-llm--open-vterm
-                base (agnostic-llm--session-shell-command root))))))
+                (if base-buffer (generate-new-buffer-name base) base)
+                (agnostic-llm--session-shell-command root))))))
           ((= prefix 4)
            (agnostic-llm--open-vterm (generate-new-buffer-name base)
                                      (agnostic-llm--session-shell-command root)))
           ((>= prefix 16)
            (agnostic-llm--open-vterm (generate-new-buffer-name base)
-                                     (agnostic-llm--provider-get :executable))))
+                                     (agnostic-llm--session-shell-command root t))))
     ;; A session launched with an explicit USER-ROOT pins its persistence and
     ;; scope to that directory: `agnostic-llm--project-root' in this vterm now
     ;; returns USER-ROOT instead of walking up to an ancestor project marker.
@@ -803,15 +944,18 @@ Nil on the very first send (no conversation history yet); a live marker
 once the first reply has settled and subsequent turns are being typed.")
 
 (defvar-local agnostic-llm--bubble-session-id nil
-  "UUID pinning every turn of this bubble to the same session.
-Generated lazily on bubble creation; used with the provider's
-`:session-id-flag' on every one-shot invocation and with its
-`:resume-flag' when promoting to a full `*llm:PROJECT*' vterm.")
+  "Provider session id pinning every turn of this bubble.")
+
+(defvar-local agnostic-llm--bubble-provider nil
+  "Provider captured when this bubble was created.")
 
 (defvar-local agnostic-llm--bubble-model nil
   "Buffer-local copy of `agnostic-llm-model' captured at bubble creation.
 Frozen at bubble open so toggling the menu's `-m' switch mid-conversation
 doesn't retroactively change which model the session uses.")
+
+(defvar-local agnostic-llm--bubble-effort nil
+  "Reasoning effort captured when this bubble was created.")
 
 (defvar-local agnostic-llm--bubble-dangerous nil
   "Buffer-local copy of `agnostic-llm-dangerously-skip-permissions'.
@@ -827,6 +971,9 @@ permission posture.")
 
 (defvar-local agnostic-llm--bubble-thinking-tick 0
   "Counter driving the thinking-dots animation.")
+
+(defvar-local agnostic-llm--bubble-json-remainder ""
+  "Incomplete JSONL event fragment held between `process-filter' calls.")
 
 (defun agnostic-llm--bubble-thinking-string (tick)
   "Return the animated dots string for TICK (1–3 dots)."
@@ -883,6 +1030,13 @@ can never strand a repeating timer on a dead buffer."
           (logior #x8000 (logand (random 65536) #x3fff))
           (random 65536) (random 65536) (random 65536)))
 
+(defun agnostic-llm--bubble-initial-session-id ()
+  "Return the active provider's client-assigned bubble session id.
+Providers with a custom bubble builder learn a server-assigned id from
+their first response instead."
+  (unless (agnostic-llm--provider-get :bubble-command-function)
+    (agnostic-llm--generate-uuid)))
+
 (defun agnostic-llm--bubble-command (prompt)
   "Build the provider's argv for PROMPT on this bubble's pinned session.
 The `:session-id-flag' carries the same UUID every turn, so the CLI treats
@@ -891,14 +1045,32 @@ all popup turns as one conversation.  Prepends
 `agnostic-llm--bubble-model' and `:dangerous-flag' from
 `agnostic-llm--bubble-dangerous' when set."
   (let ((text (concat agnostic-llm-bubble-prompt-prefix prompt)))
-    (append (list (agnostic-llm--provider-get :executable)
-                  (agnostic-llm--provider-get :session-id-flag)
-                  agnostic-llm--bubble-session-id)
-            (when agnostic-llm--bubble-model
-              (list (agnostic-llm--provider-get :model-flag) agnostic-llm--bubble-model))
-            (when agnostic-llm--bubble-dangerous
-              (list (agnostic-llm--provider-get :dangerous-flag)))
-            (list (agnostic-llm--provider-get :print-flag) text))))
+    (if-let ((builder (agnostic-llm--provider-get :bubble-command-function)))
+        (funcall builder text agnostic-llm--bubble-session-id
+                 agnostic-llm--bubble-model agnostic-llm--bubble-effort
+                 agnostic-llm--bubble-dangerous)
+      (append (list (agnostic-llm--provider-get :executable)
+                    (agnostic-llm--provider-get :session-id-flag)
+                    agnostic-llm--bubble-session-id)
+              (when agnostic-llm--bubble-model
+                (list (agnostic-llm--provider-get :model-flag) agnostic-llm--bubble-model))
+              (when agnostic-llm--bubble-effort
+                (list (agnostic-llm--provider-get :effort-flag) agnostic-llm--bubble-effort))
+              (when agnostic-llm--bubble-dangerous
+                (list (agnostic-llm--provider-get :dangerous-flag)))
+              (list (agnostic-llm--provider-get :print-flag) text)))))
+
+(defun agnostic-llm--codex-bubble-command (prompt session-id model effort dangerous)
+  "Build a Codex exec command for PROMPT and optional SESSION-ID.
+MODEL, EFFORT, and DANGEROUS control the corresponding Codex options."
+  (append (if session-id
+              (list (agnostic-llm--provider-get :executable)
+                    "exec" "resume" session-id)
+            (list (agnostic-llm--provider-get :executable) "exec"))
+          (agnostic-llm--codex-option-args model effort dangerous)
+          ;; Prompt buffers are supported even when the selected project root
+          ;; is not a Git repository; Codex otherwise refuses `exec'.
+          (list "--skip-git-repo-check" "--json" prompt)))
 
 (defun agnostic-llm--bubble-clean-chunk (chunk)
   "Strip CR, ANSI CSI sequences, and OSC sequences from CHUNK.
@@ -928,6 +1100,51 @@ LLM turn marker."
           (insert cleaned))
         (when (or first-chunk was-at-end)
           (goto-char (point-max)))))))
+
+(defun agnostic-llm--bubble-json-insert-message (text)
+  "Append a Codex JSON-event message TEXT to the current bubble."
+  (let ((inhibit-read-only t)
+        (first-message (overlayp agnostic-llm--bubble-thinking-overlay))
+        (was-at-end (= (point) (point-max))))
+    (when first-message
+      (agnostic-llm--bubble-stop-thinking (current-buffer))
+      (save-excursion
+        (goto-char (point-max))
+        (insert (propertize "— " 'face 'agnostic-llm-bubble-user-face))))
+    (save-excursion
+      (goto-char (point-max))
+      (insert text))
+    (when (or first-message was-at-end)
+      (goto-char (point-max)))))
+
+(defun agnostic-llm--bubble-json-filter (proc chunk)
+  "Process Codex JSONL CHUNK from PROC, recording session and prose output."
+  (when (buffer-live-p (process-buffer proc))
+    (with-current-buffer (process-buffer proc)
+      (let* ((input (concat agnostic-llm--bubble-json-remainder chunk))
+             (complete (string-suffix-p "\n" input))
+             (lines (split-string input "\n"))
+             (remainder (unless complete (car (last lines)))))
+        (setq-local agnostic-llm--bubble-json-remainder (or remainder ""))
+        (dolist (line (if remainder (butlast lines) lines))
+          (unless (string-blank-p line)
+            (let ((event (ignore-errors
+                           (json-parse-string line :object-type 'alist
+                                              :array-type 'list
+                                              :null-object nil :false-object nil))))
+              (pcase (alist-get 'type event)
+                ("thread.started"
+                 (setq-local agnostic-llm--bubble-session-id
+                             (alist-get 'thread_id event)))
+                ("item.completed"
+                 (let ((item (alist-get 'item event)))
+                   (when (equal (alist-get 'type item) "agent_message")
+                     (agnostic-llm--bubble-json-insert-message
+                      (or (alist-get 'text item) "")))))
+                ("error"
+                 (agnostic-llm--bubble-json-insert-message
+                  (format "[Codex error: %s]"
+                          (or (alist-get 'message event) "unknown error"))))))))))))
 
 (defun agnostic-llm--bubble-sentinel (proc _event)
   "Process sentinel for PROC: append a fresh input prompt and hand control back."
@@ -971,25 +1188,20 @@ to one session.  Promote spawns a fresh interactive CLI with `:resume-flag'
          (base      (agnostic-llm--session-buffer-name label))
          (name      (generate-new-buffer-name base))
          (sid       agnostic-llm--bubble-session-id)
+         (provider  agnostic-llm--bubble-provider)
          (dangerous agnostic-llm--bubble-dangerous)
          (model     agnostic-llm--bubble-model)
+         (effort    agnostic-llm--bubble-effort)
          (bubble    (current-buffer)))
     (kill-buffer bubble)
-    (let ((default-directory dir))
+    (let ((default-directory dir)
+          (agnostic-llm-provider provider)
+          (agnostic-llm-model model)
+          (agnostic-llm-effort effort)
+          (agnostic-llm-dangerously-skip-permissions dangerous))
       (agnostic-llm--open-vterm
        name
-       (format "%s %s %s%s%s"
-               (agnostic-llm--provider-get :executable)
-               (agnostic-llm--provider-get :resume-flag)
-               (shell-quote-argument sid)
-               (if model
-                   (format " %s %s"
-                           (agnostic-llm--provider-get :model-flag)
-                           (shell-quote-argument model))
-                 "")
-               (if dangerous
-                   (concat " " (agnostic-llm--provider-get :dangerous-flag))
-                 ""))))))
+       (agnostic-llm--session-shell-command root nil sid)))))
 
 ;;;###autoload
 (defun agnostic-llm-prompt-bubble ()
@@ -1047,7 +1259,10 @@ so only the response is rendered."
       (setq header-line-format
             (propertize " LLM  (running — C-c C-k cancel)"
                         'face 'agnostic-llm-bubble-header-face)))
-    (let* ((args (agnostic-llm--shell-argv
+    (setq-local agnostic-llm--bubble-json-remainder "")
+    (let* ((agnostic-llm-provider agnostic-llm--bubble-provider)
+           (json-events (agnostic-llm--provider-get :bubble-json-events))
+           (args (agnostic-llm--shell-argv
                   (mapconcat #'shell-quote-argument
                              (agnostic-llm--bubble-command prompt) " ")))
            (process-environment
@@ -1055,7 +1270,9 @@ so only the response is rendered."
                     process-environment))
            (proc (apply #'start-process "agnostic-llm-bubble" (current-buffer) args)))
       (setq-local agnostic-llm--bubble-process proc)
-      (set-process-filter   proc #'agnostic-llm--bubble-filter)
+      (set-process-filter proc (if json-events
+                                   #'agnostic-llm--bubble-json-filter
+                                 #'agnostic-llm--bubble-filter))
       (set-process-sentinel proc #'agnostic-llm--bubble-sentinel))))
 
 ;;;###autoload
@@ -1138,9 +1355,12 @@ untouched."
       (setq-local agnostic-llm--prompt-project-root root)
       (setq-local agnostic-llm--prompt-bubble bubble)
       (when bubble
-        (setq-local agnostic-llm--bubble-session-id (agnostic-llm--generate-uuid))
+        (setq-local agnostic-llm--bubble-provider agnostic-llm-provider)
+        (setq-local agnostic-llm--bubble-session-id
+                    (agnostic-llm--bubble-initial-session-id))
         (setq-local agnostic-llm--bubble-dangerous agnostic-llm-dangerously-skip-permissions)
         (setq-local agnostic-llm--bubble-model agnostic-llm-model)
+        (setq-local agnostic-llm--bubble-effort agnostic-llm-effort)
         (goto-char (point-max))
         (insert (propertize "— " 'face 'agnostic-llm-bubble-user-face))
         (setq-local agnostic-llm--bubble-input-start (copy-marker (point) nil))
@@ -1672,6 +1892,38 @@ Per-invocation overrides via the menu's `-m' switch are unaffected."
              (if value (format "set to %s (saved)" value)
                "cleared (CLI picks)"))))
 
+;;;###autoload
+(defun agnostic-llm-set-provider (provider)
+  "Select and persist PROVIDER for future LLM sessions.
+Clear saved model or effort defaults that the new provider does not support."
+  (interactive
+   (list (intern
+          (completing-read
+           (format "Provider (current: %s): " agnostic-llm-provider)
+           (mapcar (lambda (entry) (symbol-name (car entry)))
+                   agnostic-llm-providers)
+           nil t nil nil (symbol-name agnostic-llm-provider)))))
+  (unless (alist-get provider agnostic-llm-providers)
+    (user-error "Unknown provider: %s" provider))
+  (customize-save-variable 'agnostic-llm-provider provider)
+  (let ((cleared nil))
+    (unless (or (null agnostic-llm-model)
+                (assoc agnostic-llm-model (agnostic-llm--models)))
+      (customize-save-variable 'agnostic-llm-model nil)
+      (push "model" cleared))
+    (unless (or (null agnostic-llm-effort)
+                (member agnostic-llm-effort
+                        (agnostic-llm-effort-choices-for-model agnostic-llm-model)))
+      (customize-save-variable 'agnostic-llm-effort nil)
+      (push "effort" cleared))
+    (message "LLM provider set to %s (saved)%s"
+             provider
+             (if cleared
+                 (format "; cleared incompatible %s default%s"
+                         (string-join (nreverse cleared) " and ")
+                         (if (= (length cleared) 1) "" "s"))
+               ""))))
+
 (transient-define-suffix agnostic-llm--menu-prompt-bubble ()
   "Launch the inline-conversation bubble; honors the menu's switches."
   :description "Prompt inline (conversation)"
@@ -1683,6 +1935,7 @@ Per-invocation overrides via the menu's `-m' switch are unaffected."
         (agnostic-llm-dangerously-skip-permissions
          (or agnostic-llm-dangerously-skip-permissions (agnostic-llm--menu-dangerous-p)))
         (agnostic-llm-model (or (agnostic-llm--menu-flag "--model=") agnostic-llm-model))
+        (agnostic-llm-effort (or (agnostic-llm--menu-effort) agnostic-llm-effort))
         (default-directory (or (plist-get (transient-scope) :root)
                                (if (agnostic-llm--menu-use-cwd-p)
                                    default-directory
@@ -1751,6 +2004,7 @@ current project; the header highlights the override."
     ("P" agnostic-llm--menu-prompt-bubble)
     ("r" "Resume last prompt"     agnostic-llm-prompt-resume)
     ("H" "Prompt history"         agnostic-llm-prompt-history)
+    ("B" "Set provider"           agnostic-llm-set-provider)
     ("M" "Set default model"      agnostic-llm-set-default-model)
     ("?" "Describe at point"      agnostic-llm-describe-at-point)
     ("R" "Show last response"     agnostic-llm-show-last-response)]
@@ -1833,9 +2087,12 @@ buffer name is used as context instead."
       (erase-buffer)
       (setq-local agnostic-llm--prompt-project-root root)
       (setq-local agnostic-llm--prompt-bubble t)
-      (setq-local agnostic-llm--bubble-session-id (agnostic-llm--generate-uuid))
+      (setq-local agnostic-llm--bubble-provider agnostic-llm-provider)
+      (setq-local agnostic-llm--bubble-session-id
+                  (agnostic-llm--bubble-initial-session-id))
       (setq-local agnostic-llm--bubble-dangerous agnostic-llm-dangerously-skip-permissions)
-      (setq-local agnostic-llm--bubble-model agnostic-llm-model))
+      (setq-local agnostic-llm--bubble-model agnostic-llm-model)
+      (setq-local agnostic-llm--bubble-effort agnostic-llm-effort))
     (agnostic-llm--present-prompt-buffer buf)
     (with-current-buffer buf
       (agnostic-llm--bubble-spawn-turn text))))

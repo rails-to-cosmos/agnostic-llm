@@ -11,7 +11,8 @@
   "When no marker files exist, return the directory itself."
   (let ((dir (make-temp-file "agnostic-llm-test-" t)))
     (unwind-protect
-        (let ((default-directory (file-name-as-directory dir)))
+        (let ((default-directory (file-name-as-directory dir))
+              (agnostic-llm-project-root-markers '(".marker-that-does-not-exist")))
           (should (equal (agnostic-llm--project-root) (file-name-as-directory dir))))
       (delete-directory dir t))))
 
@@ -271,6 +272,80 @@ would fail to match \"claude-sonnet-5\" and silently lose \"ultracode\"."
   (test-agnostic-llm--with-provider '(:session-dir "/store/")
     (should (equal (agnostic-llm--session-dir "/home/u/proj")
                    (expand-file-name "-home-u-proj" "/store/")))))
+
+(ert-deftest test-codex-provider-is-shipped ()
+  "Codex is a built-in provider with its native executable and models."
+  (let ((agnostic-llm-provider 'codex))
+    (should (equal (agnostic-llm--provider-get :executable) "codex"))
+    (should (member "gpt-6-astra" (agnostic-llm-model-choices)))
+    (should (member "xhigh"
+                    (agnostic-llm-effort-choices-for-model "gpt-5.6-terra")))))
+
+(ert-deftest test-codex-session-command-native-flags ()
+  "Codex session commands use resume and model-reasoning config syntax."
+  (let ((agnostic-llm-provider 'codex)
+        (agnostic-llm-model "gpt-5.6-terra")
+        (agnostic-llm-effort "high")
+        (agnostic-llm-dangerously-skip-permissions t))
+    (should
+     (equal (agnostic-llm--session-shell-command "/project" t)
+            "codex --model gpt-5.6-terra -c model_reasoning_effort\\=high --dangerously-bypass-approvals-and-sandbox"))
+    (should
+     (equal (agnostic-llm--session-shell-command "/project" nil "session-id")
+            "codex resume session-id --model gpt-5.6-terra -c model_reasoning_effort\\=high --dangerously-bypass-approvals-and-sandbox"))))
+
+(ert-deftest test-codex-bubble-command-starts-and-resumes ()
+  "Codex bubbles start with exec and continue with exec resume."
+  (let ((agnostic-llm-provider 'codex)
+        (agnostic-llm--bubble-model "gpt-6-astra")
+        (agnostic-llm--bubble-effort "medium")
+        (agnostic-llm--bubble-dangerous nil)
+        (agnostic-llm-bubble-prompt-prefix ""))
+    (let ((agnostic-llm--bubble-session-id nil))
+      (should (equal (agnostic-llm--bubble-command "hello")
+                     '("codex" "exec" "--model" "gpt-6-astra"
+                       "-c" "model_reasoning_effort=medium"
+                       "--skip-git-repo-check" "--json" "hello"))))
+    (let ((agnostic-llm--bubble-session-id "thread-id"))
+      (should (equal (agnostic-llm--bubble-command "again")
+                     '("codex" "exec" "resume" "thread-id"
+                       "--model" "gpt-6-astra" "-c"
+                       "model_reasoning_effort=medium"
+                       "--skip-git-repo-check" "--json" "again"))))))
+
+(ert-deftest test-codex-extract-last-response ()
+  "Codex response extraction returns the newest assistant output text."
+  (let ((records
+         '(((type . "response_item")
+            (payload (type . "message") (role . "assistant")
+                     (content ((type . "output_text") (text . "older")))))
+           ((type . "response_item")
+            (payload (type . "message") (role . "user")
+                     (content ((type . "input_text") (text . "question")))))
+           ((type . "response_item")
+            (payload (type . "message") (role . "assistant")
+                     (content ((type . "output_text") (text . "latest"))))))))
+    (should (equal (agnostic-llm--codex-extract-last-response records)
+                   "latest"))))
+
+(ert-deftest test-codex-json-filter-captures-thread-and-message ()
+  "Codex JSONL events pin the bubble thread and render agent prose."
+  (let ((buffer (generate-new-buffer " *agnostic-llm-json-test*"))
+        process)
+    (unwind-protect
+        (with-current-buffer buffer
+          (setq process (make-pipe-process
+                         :name "agnostic-llm-json-test" :buffer buffer :noquery t))
+          (agnostic-llm--bubble-json-filter
+           process
+           "{\"type\":\"thread.started\",\"thread_id\":\"thread-1\"}\n{\"type\":\"item.com")
+          (agnostic-llm--bubble-json-filter
+           process
+           "pleted\",\"item\":{\"type\":\"agent_message\",\"text\":\"hello\"}}\n")
+          (should (equal agnostic-llm--bubble-session-id "thread-1"))
+          (should (equal (buffer-string) "hello")))
+      (when (process-live-p process) (delete-process process))
+      (when (buffer-live-p buffer) (kill-buffer buffer)))))
 
 ;; ---------------------------------------------------------------------------
 ;; Session buffer naming

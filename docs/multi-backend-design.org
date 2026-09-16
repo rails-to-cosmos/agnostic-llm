@@ -3,6 +3,15 @@
 
 Back to [[file:index.org][Index]].
 
+* Implementation status
+
+Claude Code and OpenAI Codex are now built-in providers. The implementation
+uses the existing provider plist plus command, session-file, response-parser,
+and JSON-event hooks instead of the =cl-defstruct= proposed below. Codex uses
+its native =resume --last= and =exec --json= flows, discovers project sessions
+in =~/.codex/sessions/=, and parses Codex rollout records for the response
+viewer. The rest of this document is retained as the original design record.
+
 * Goal
 
 Drive any agentic CLI (codex, gemini, opencode, aider, ...) from the
