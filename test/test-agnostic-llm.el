@@ -214,6 +214,41 @@ would fail to match \"claude-sonnet-5\" and silently lose \"ultracode\"."
     (should (equal (agnostic-llm--provider-get :executable) "codex"))
     (should (equal (agnostic-llm--provider-get :print-flag) "-q"))))
 
+(ert-deftest test-provider-option-vocabulary-derives-native-argv ()
+  "Semantic transient options derive each provider's native argv."
+  (let ((agnostic-llm-provider 'claude))
+    (should (equal (agnostic-llm--provider-options-args "opus" "high" t)
+                   '("--model" "opus" "--effort" "high"
+                     "--dangerously-skip-permissions"))))
+  (let ((agnostic-llm-provider 'codex))
+    (should (equal (agnostic-llm--provider-options-args
+                    "gpt-5.6-terra" "high" t)
+                   '("--model" "gpt-5.6-terra"
+                     "-c" "model_reasoning_effort=high" "--yolo")))))
+
+(ert-deftest test-transient-vocabulary-parses-all-options ()
+  "All transient arguments are parsed through the semantic UI vocabulary."
+  (cl-letf (((symbol-function 'transient-args)
+             (lambda (_prefix)
+               '("--btw" "-c" "--dangerously-skip-permissions"
+                 "--model=gpt-6-astra" "--effort=medium"))))
+    (should (agnostic-llm--menu-switch-p 'btw))
+    (should (agnostic-llm--menu-use-cwd-p))
+    (should (agnostic-llm--menu-dangerous-p))
+    (should (equal (agnostic-llm--menu-option-value 'model) "gpt-6-astra"))
+    (should (equal (agnostic-llm--menu-option-value 'effort) "medium"))))
+
+(ert-deftest test-transient-infixes-use-canonical-vocabulary ()
+  "The menu's infixes are generated from its canonical vocabulary."
+  (dolist (pair '((btw . agnostic-llm--menu-btw-option)
+                  (cwd . agnostic-llm--menu-cwd-option)
+                  (dangerous . agnostic-llm--menu-dangerous-option)
+                  (model . agnostic-llm--menu-model-option)
+                  (effort . agnostic-llm--menu-effort-option)))
+    (should
+     (equal (slot-value (get (cdr pair) 'transient--suffix) 'argument)
+            (agnostic-llm--transient-option (car pair))))))
+
 (ert-deftest test-provider-unknown-signals ()
   "An unknown active provider signals an error."
   (let ((agnostic-llm-provider 'nope)
@@ -224,7 +259,9 @@ would fail to match \"claude-sonnet-5\" and silently lose \"ultracode\"."
   "The bubble argv is built from the provider's executable and flags."
   (test-agnostic-llm--with-provider
       (list :executable "codex" :session-id-flag "--sid"
-            :model-flag "--model" :dangerous-flag "--yolo" :print-flag "-q")
+            :option-vocabulary '((model "--model" "%s")
+                                 (dangerous "--yolo"))
+            :print-flag "-q")
     (let ((agnostic-llm--bubble-session-id "ABC")
           (agnostic-llm--bubble-model nil)
           (agnostic-llm--bubble-dangerous nil)
@@ -238,8 +275,9 @@ would fail to match \"claude-sonnet-5\" and silently lose \"ultracode\"."
     (unwind-protect
         (test-agnostic-llm--with-provider
             (list :executable "codex" :continue-flag "-c"
-                  :model-flag "--model" :effort-flag "--effort"
-                  :dangerous-flag "--yolo"
+                  :option-vocabulary '((model "--model" "%s")
+                                       (effort "--effort" "%s")
+                                       (dangerous "--yolo"))
                   :session-dir (file-name-as-directory dir)
                   :session-file-regexp "\\.jsonl\\'")
           (let ((default-directory (file-name-as-directory dir))
@@ -289,10 +327,10 @@ would fail to match \"claude-sonnet-5\" and silently lose \"ultracode\"."
         (agnostic-llm-dangerously-skip-permissions t))
     (should
      (equal (agnostic-llm--session-shell-command "/project" t)
-            "codex --model gpt-5.6-terra -c model_reasoning_effort\\=high --dangerously-bypass-approvals-and-sandbox"))
+            "codex --model gpt-5.6-terra -c model_reasoning_effort\\=high --yolo"))
     (should
      (equal (agnostic-llm--session-shell-command "/project" nil "session-id")
-            "codex resume session-id --model gpt-5.6-terra -c model_reasoning_effort\\=high --dangerously-bypass-approvals-and-sandbox"))))
+            "codex resume session-id --model gpt-5.6-terra -c model_reasoning_effort\\=high --yolo"))))
 
 (ert-deftest test-codex-bubble-command-starts-and-resumes ()
   "Codex bubbles start with exec and continue with exec resume."
@@ -306,11 +344,12 @@ would fail to match \"claude-sonnet-5\" and silently lose \"ultracode\"."
                      '("codex" "exec" "--model" "gpt-6-astra"
                        "-c" "model_reasoning_effort=medium"
                        "--skip-git-repo-check" "--json" "hello"))))
-    (let ((agnostic-llm--bubble-session-id "thread-id"))
+    (let ((agnostic-llm--bubble-session-id "thread-id")
+          (agnostic-llm--bubble-dangerous t))
       (should (equal (agnostic-llm--bubble-command "again")
                      '("codex" "exec" "resume" "thread-id"
                        "--model" "gpt-6-astra" "-c"
-                       "model_reasoning_effort=medium"
+                       "model_reasoning_effort=medium" "--yolo"
                        "--skip-git-repo-check" "--json" "again"))))))
 
 (ert-deftest test-codex-extract-last-response ()

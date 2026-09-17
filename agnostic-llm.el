@@ -3,7 +3,7 @@
 ;; Copyright (c) 2026 Dmitry Akatov
 ;; Author: Dmitry Akatov <dmitry.akatov@protonmail.com>
 ;; URL: https://github.com/rails-to-cosmos/agnostic-llm
-;; Package-Version: 0.8.0.0.20260916.0
+;; Package-Version: 0.9.0.0.20260917.0
 ;; Package-Requires: ((emacs "28.1") (transient "0.4.0") (vterm "0.0.2"))
 ;; Keywords: convenience, tools
 
@@ -73,46 +73,45 @@ the Claude CLI."
   :group 'agnostic-llm)
 
 (defcustom agnostic-llm-providers
-  '((claude
-     :executable          "claude"
-     :continue-flag       "-c"
-     :print-flag          "-p"
-     :model-flag          "--model"
-     :effort-flag         "--effort"
-     :session-id-flag     "--session-id"
-     :resume-flag         "--resume"
-     :dangerous-flag      "--dangerously-skip-permissions"
-     :session-dir         "~/.claude/projects/"
-     :session-file-regexp "\\.jsonl\\'"
-     :model-prefix        "claude-"
-     :models
-     (("claude-fable-5"    . (:efforts ("default" "low" "medium" "high" "max" "ultracode")))
-      ("claude-sonnet-5"   . (:efforts ("default" "low" "medium" "high" "max" "ultracode")))
-      ("claude-opus-5"     . (:efforts ("default" "low" "medium" "high" "max" "ultracode")))
-      ("claude-opus-4-8"   . (:efforts ("default" "low" "medium" "high" "max" "ultracode")))
-      ("claude-opus-4-7"   . (:efforts ("default" "low" "medium" "high" "max")))
-      ("claude-opus-4-6"   . (:efforts ("default" "low" "medium" "high" "max")))
-      ("claude-sonnet-4-6" . (:efforts ("default" "low" "medium" "high" "max")))
-      ("claude-haiku-4-5"  . (:efforts ("default" "low" "medium" "high" "max")))))
-    (codex
-     :executable          "codex"
-     :continue-flag       "resume --last"
-     :print-flag          "exec"
-     :model-flag          "--model"
-     :dangerous-flag      "--dangerously-bypass-approvals-and-sandbox"
-     :session-dir         "~/.codex/sessions/"
-     :session-file-regexp "rollout-.*\\.jsonl\\'"
-     :model-prefix        ""
-     :session-command-function agnostic-llm--codex-session-command
-     :bubble-command-function  agnostic-llm--codex-bubble-command
-     :session-file-function    agnostic-llm--codex-session-file
-     :extract-response-function agnostic-llm--codex-extract-last-response
-     :bubble-json-events  t
-     :models
-     (("gpt-6-astra"   . (:efforts ("default" "low" "medium" "high" "xhigh" "max")))
-      ("gpt-5.6-sol"   . (:efforts ("default" "none" "low" "medium" "high" "xhigh" "max")))
-      ("gpt-5.6-terra" . (:efforts ("default" "none" "low" "medium" "high" "xhigh" "max")))
-      ("gpt-5.6-luna"  . (:efforts ("default" "none" "low" "medium" "high" "xhigh" "max"))))))
+  '((claude :executable          "claude"
+            :continue-flag       "-c"
+            :print-flag          "-p"
+            :session-id-flag     "--session-id"
+            :resume-flag         "--resume"
+            :option-vocabulary   ((model "--model" "%s")
+                                  (effort "--effort" "%s")
+                                  (dangerous "--dangerously-skip-permissions"))
+            :session-dir         "~/.claude/projects/"
+            :session-file-regexp "\\.jsonl\\'"
+            :model-prefix        "claude-"
+            :models              (("claude-fable-5"    . (:efforts ("default" "low" "medium" "high" "max" "ultracode")))
+                                  ("claude-sonnet-5"   . (:efforts ("default" "low" "medium" "high" "max" "ultracode")))
+                                  ("claude-opus-5"     . (:efforts ("default" "low" "medium" "high" "max" "ultracode")))
+                                  ("claude-opus-4-8"   . (:efforts ("default" "low" "medium" "high" "max" "ultracode")))
+                                  ("claude-opus-4-7"   . (:efforts ("default" "low" "medium" "high" "max")))
+                                  ("claude-opus-4-6"   . (:efforts ("default" "low" "medium" "high" "max")))
+                                  ("claude-sonnet-4-6" . (:efforts ("default" "low" "medium" "high" "max")))
+                                  ("claude-haiku-4-5"  . (:efforts ("default" "low" "medium" "high" "max")))))
+
+    (codex :executable          "codex"
+           :continue-flag       "resume --last"
+           :print-flag          "exec"
+           :option-vocabulary   ((model "--model" "%s")
+                                 (effort "-c" "model_reasoning_effort=%s")
+                                 (dangerous "--yolo"))
+           :session-dir         "~/.codex/sessions/"
+           :session-file-regexp "rollout-.*\\.jsonl\\'"
+           :model-prefix        ""
+           :session-command-function agnostic-llm--codex-session-command
+           :bubble-command-function  agnostic-llm--codex-bubble-command
+           :session-file-function    agnostic-llm--codex-session-file
+           :extract-response-function agnostic-llm--codex-extract-last-response
+           :bubble-json-events  t
+           :models              (("gpt-6-astra"   . (:efforts ("default" "low" "medium" "high" "xhigh" "max")))
+                                 ("gpt-5.6-sol"   . (:efforts ("default" "none" "low" "medium" "high" "xhigh" "max")))
+                                 ("gpt-5.6-terra" . (:efforts ("default" "none" "low" "medium" "high" "xhigh" "max")))
+                                 ("gpt-5.6-luna"  . (:efforts ("default" "none" "low" "medium" "high" "xhigh" "max"))))))
+
   "Registry of agentic-CLI providers, keyed by symbol.
 Each entry is (SYMBOL . PLIST); `agnostic-llm-provider' names the active
 one.  PLIST fields:
@@ -120,11 +119,11 @@ one.  PLIST fields:
   :executable          program run for the session vterm and bubble.
   :continue-flag       continue the most recent session.
   :print-flag          one-shot, non-interactive prompt.
-  :model-flag          name the model (value follows).
-  :effort-flag         name the reasoning effort (value follows).
+  :option-vocabulary   alist translating semantic options into CLI argv
+                       templates.  Built-in keys are `model', `effort',
+                       and `dangerous'; a \"%s\" token receives the value.
   :session-id-flag     pin a stable session id (bubble turns).
   :resume-flag         resume a session by id.
-  :dangerous-flag      skip tool-use permission prompts.
   :session-dir         session-store root; the project directory encodes
                        into one component under it.
   :session-file-regexp matches a session transcript there (newest by
@@ -156,6 +155,25 @@ Signals an error when `agnostic-llm-provider' names no entry in
 (defun agnostic-llm--provider-get (key)
   "Return KEY from the active provider's plist (see `agnostic-llm--provider')."
   (plist-get (agnostic-llm--provider) key))
+
+(defun agnostic-llm--provider-option-args (option value)
+  "Derive argv for semantic OPTION with VALUE under the active provider.
+The provider's `:option-vocabulary' maps OPTION to an argv template.  Each
+\"%s\" occurrence in that template is replaced with VALUE.  A nil VALUE means
+the option is inactive and produces no arguments."
+  (when value
+    (when-let ((template
+                (cdr (assq option
+                           (agnostic-llm--provider-get :option-vocabulary)))))
+      (mapcar (lambda (word)
+                (string-replace "%s" (format "%s" value) word))
+              template))))
+
+(defun agnostic-llm--provider-options-args (model effort dangerous)
+  "Derive provider argv for semantic MODEL, EFFORT, and DANGEROUS options."
+  (append (agnostic-llm--provider-option-args 'model model)
+          (agnostic-llm--provider-option-args 'effort effort)
+          (agnostic-llm--provider-option-args 'dangerous dangerous)))
 
 (defun agnostic-llm--models ()
   "Return the active provider's model catalog (its `:models' alist)."
@@ -201,7 +219,7 @@ Pops to another window unless SAME-WINDOW."
   :group 'agnostic-llm)
 
 (defcustom agnostic-llm-dangerously-skip-permissions nil
-  "When non-nil, pass the provider's `:dangerous-flag' to the CLI.
+  "When non-nil, pass the provider's `dangerous' option to the CLI.
 Applies to the main `*llm:PROJECT*' vterm and to the inline
 bubble (captured once at bubble creation as buffer-local state).
 
@@ -217,7 +235,7 @@ The names come from the active provider's model catalog, in table order."
   (mapcar #'car (agnostic-llm--models)))
 
 (defcustom agnostic-llm-model nil
-  "Model name passed to the active provider (via its `:model-flag').
+  "Model name passed through the active provider's option vocabulary.
 Nil means use the CLI's own default (whatever its config picks).  A
 string is passed through verbatim — full names like \"claude-opus-4-7\"
 or aliases like \"opus\" both work with the claude provider.
@@ -303,7 +321,7 @@ passes no effort to the CLI."
   (plist-get (cdr (agnostic-llm--model-spec model)) :efforts))
 
 (defcustom agnostic-llm-effort nil
-  "Reasoning effort passed to the active provider (via its `:effort-flag').
+  "Reasoning effort passed through the active provider's option vocabulary.
 Nil means use the CLI's own default.  A string like \"low\", \"medium\",
 or \"high\" is passed through verbatim.
 
@@ -470,13 +488,6 @@ claude's layout."
   "Return a safely shell-quoted command string for ARGV."
   (mapconcat #'shell-quote-argument argv " "))
 
-(defun agnostic-llm--codex-option-args (model effort dangerous)
-  "Return Codex CLI arguments for MODEL, EFFORT, and DANGEROUS."
-  (append (when model (list "--model" model))
-          (when effort (list "-c" (format "model_reasoning_effort=%s" effort)))
-          (when dangerous
-            (list "--dangerously-bypass-approvals-and-sandbox"))))
-
 (defun agnostic-llm--codex-session-command (root fresh resume-id model effort dangerous)
   "Build a Codex interactive command for ROOT.
 FRESH suppresses continuation; RESUME-ID selects one exact session.
@@ -489,13 +500,13 @@ MODEL, EFFORT, and DANGEROUS control the corresponding Codex options."
                 (list executable "resume" "--last"))
                (t (list executable)))))
     (agnostic-llm--shell-command-from-argv
-     (append base (agnostic-llm--codex-option-args model effort dangerous)))))
+     (append base (agnostic-llm--provider-options-args model effort dangerous)))))
 
 (defun agnostic-llm--session-shell-command (root &optional fresh resume-id)
   "Return the shell command launching the provider in ROOT.
 Adds the `:continue-flag' when the current directory has a recorded
-session.  Appends `:model-flag', `:effort-flag', and `:dangerous-flag'
-when `agnostic-llm-model', `agnostic-llm-effort', and
+session.  Appends the provider vocabulary's `model', `effort', and
+`dangerous' arguments when `agnostic-llm-model', `agnostic-llm-effort', and
 `agnostic-llm-dangerously-skip-permissions' are respectively set.  With
 FRESH, never continue; with RESUME-ID, resume that exact session."
   (if-let ((builder (agnostic-llm--provider-get :session-command-function)))
@@ -509,17 +520,12 @@ FRESH, never continue; with RESUME-ID, resume that exact session."
                   ((and (not fresh) (agnostic-llm--session-exists-p root))
                    (concat exe " " (agnostic-llm--provider-get :continue-flag)))
                   (t exe)))
-           (with-model (if agnostic-llm-model
-                           (concat base " " (agnostic-llm--provider-get :model-flag) " "
-                                   (shell-quote-argument agnostic-llm-model))
-                         base))
-           (with-effort (if agnostic-llm-effort
-                            (concat with-model " " (agnostic-llm--provider-get :effort-flag) " "
-                                    (shell-quote-argument agnostic-llm-effort))
-                          with-model)))
-      (if agnostic-llm-dangerously-skip-permissions
-          (concat with-effort " " (agnostic-llm--provider-get :dangerous-flag))
-        with-effort))))
+           (options (agnostic-llm--provider-options-args
+                     agnostic-llm-model agnostic-llm-effort
+                     agnostic-llm-dangerously-skip-permissions)))
+      (if options
+          (concat base " " (agnostic-llm--shell-command-from-argv options))
+        base))))
 
 ;;; Show last response in a side buffer
 ;;
@@ -1041,9 +1047,8 @@ their first response instead."
   "Build the provider's argv for PROMPT on this bubble's pinned session.
 The `:session-id-flag' carries the same UUID every turn, so the CLI treats
 all popup turns as one conversation.  Prepends
-`agnostic-llm-bubble-prompt-prefix' to PROMPT; adds `:model-flag' from
-`agnostic-llm--bubble-model' and `:dangerous-flag' from
-`agnostic-llm--bubble-dangerous' when set."
+`agnostic-llm-bubble-prompt-prefix' to PROMPT; translates the bubble's model,
+effort, and dangerous values through the active provider's option vocabulary."
   (let ((text (concat agnostic-llm-bubble-prompt-prefix prompt)))
     (if-let ((builder (agnostic-llm--provider-get :bubble-command-function)))
         (funcall builder text agnostic-llm--bubble-session-id
@@ -1052,12 +1057,9 @@ all popup turns as one conversation.  Prepends
       (append (list (agnostic-llm--provider-get :executable)
                     (agnostic-llm--provider-get :session-id-flag)
                     agnostic-llm--bubble-session-id)
-              (when agnostic-llm--bubble-model
-                (list (agnostic-llm--provider-get :model-flag) agnostic-llm--bubble-model))
-              (when agnostic-llm--bubble-effort
-                (list (agnostic-llm--provider-get :effort-flag) agnostic-llm--bubble-effort))
-              (when agnostic-llm--bubble-dangerous
-                (list (agnostic-llm--provider-get :dangerous-flag)))
+              (agnostic-llm--provider-options-args
+               agnostic-llm--bubble-model agnostic-llm--bubble-effort
+               agnostic-llm--bubble-dangerous)
               (list (agnostic-llm--provider-get :print-flag) text)))))
 
 (defun agnostic-llm--codex-bubble-command (prompt session-id model effort dangerous)
@@ -1067,7 +1069,7 @@ MODEL, EFFORT, and DANGEROUS control the corresponding Codex options."
               (list (agnostic-llm--provider-get :executable)
                     "exec" "resume" session-id)
             (list (agnostic-llm--provider-get :executable) "exec"))
-          (agnostic-llm--codex-option-args model effort dangerous)
+          (agnostic-llm--provider-options-args model effort dangerous)
           ;; Prompt buffers are supported even when the selected project root
           ;; is not a Git repository; Codex otherwise refuses `exec'.
           (list "--skip-git-repo-check" "--json" prompt)))
@@ -1835,30 +1837,51 @@ Source-file comment is left untouched — remove it manually if desired."
 
 ;;; Transient Menu
 
+(eval-and-compile
+  (defconst agnostic-llm--transient-option-vocabulary
+    '((btw . "--btw")
+      (cwd . "-c")
+      (dangerous . "--dangerously-skip-permissions")
+      (model . "--model=")
+      (effort . "--effort="))
+    "Provider-neutral arguments exported by `agnostic-llm-menu'.
+These are UI vocabulary.  Provider command lines are derived independently
+from each provider's `:option-vocabulary'."))
+
+(defun agnostic-llm--transient-option (option)
+  "Return the provider-neutral transient argument for semantic OPTION."
+  (or (alist-get option agnostic-llm--transient-option-vocabulary)
+      (error "Unknown transient option: %s" option)))
+
+(defun agnostic-llm--menu-switch-p (option)
+  "Return non-nil when transient switch OPTION is active."
+  (member (agnostic-llm--transient-option option)
+          (transient-args 'agnostic-llm-menu)))
+
+(defun agnostic-llm--menu-option-value (option)
+  "Return transient OPTION's value, or nil for an unset/default value."
+  (let* ((prefix (agnostic-llm--transient-option option))
+         (value (cl-some (lambda (argument)
+                           (and (stringp argument)
+                                (string-prefix-p prefix argument)
+                                (substring argument (length prefix))))
+                         (transient-args 'agnostic-llm-menu))))
+    (unless (equal value "default") value)))
+
 (defun agnostic-llm--menu-dangerous-p ()
   "Return non-nil if the menu's `-d' switch is active for this invocation."
-  (member "--dangerously-skip-permissions" (transient-args 'agnostic-llm-menu)))
+  (agnostic-llm--menu-switch-p 'dangerous))
 
 (defun agnostic-llm--menu-use-cwd-p ()
   "Return non-nil if the menu's `-c' switch is active."
-  (member "-c" (transient-args 'agnostic-llm-menu)))
-
-(defun agnostic-llm--menu-flag (prefix)
-  "Return the menu argument value for PREFIX (e.g. \"--model=\"), or nil.
-\"default\" is treated as nil so that no flag is passed."
-  (let ((val (cl-some (lambda (a)
-                        (and (stringp a)
-                             (string-prefix-p prefix a)
-                             (substring a (length prefix))))
-                      (transient-args 'agnostic-llm-menu))))
-    (if (equal val "default") nil val)))
+  (agnostic-llm--menu-switch-p 'cwd))
 
 (defun agnostic-llm--menu-current-model ()
   "Return the model in effect for `agnostic-llm-menu'.
 That is the `-m' override, else `agnostic-llm-model'.  Guarded so it is
 safe to call while the transient is live (e.g. from an infix `:choices'
 function)."
-  (or (ignore-errors (agnostic-llm--menu-flag "--model="))
+  (or (ignore-errors (agnostic-llm--menu-option-value 'model))
       agnostic-llm-model))
 
 (defun agnostic-llm--menu-effort ()
@@ -1867,7 +1890,7 @@ Returns nil when no effort is set, or when the set effort is absent from
 the current model's `:efforts' in the provider catalog (e.g. \"ultracode\"
 when the selected model does not offer it), so an unsupported level is
 never passed to the CLI."
-  (let ((effort (agnostic-llm--menu-flag "--effort=")))
+  (let ((effort (agnostic-llm--menu-option-value 'effort)))
     (and effort
          (member effort (agnostic-llm-effort-choices-for-model (agnostic-llm--menu-current-model)))
          effort)))
@@ -1929,12 +1952,13 @@ Clear saved model or effort defaults that the new provider does not support."
   :description "Prompt inline (conversation)"
   (interactive)
   (let ((agnostic-llm-bubble-prompt-prefix
-         (if (member "--btw" (transient-args 'agnostic-llm-menu))
+         (if (agnostic-llm--menu-switch-p 'btw)
              "/btw "
            ""))
         (agnostic-llm-dangerously-skip-permissions
          (or agnostic-llm-dangerously-skip-permissions (agnostic-llm--menu-dangerous-p)))
-        (agnostic-llm-model (or (agnostic-llm--menu-flag "--model=") agnostic-llm-model))
+        (agnostic-llm-model
+         (or (agnostic-llm--menu-option-value 'model) agnostic-llm-model))
         (agnostic-llm-effort (or (agnostic-llm--menu-effort) agnostic-llm-effort))
         (default-directory (or (plist-get (transient-scope) :root)
                                (if (agnostic-llm--menu-use-cwd-p)
@@ -1949,7 +1973,8 @@ Clear saved model or effort defaults that the new provider does not support."
   (let* ((scope (transient-scope))
          (agnostic-llm-dangerously-skip-permissions
           (or agnostic-llm-dangerously-skip-permissions (agnostic-llm--menu-dangerous-p)))
-         (agnostic-llm-model (or (agnostic-llm--menu-flag "--model=") agnostic-llm-model))
+         (agnostic-llm-model
+          (or (agnostic-llm--menu-option-value 'model) agnostic-llm-model))
          (agnostic-llm-effort (or (agnostic-llm--menu-effort) agnostic-llm-effort))
          (root (or (plist-get scope :root)
                    (when (agnostic-llm--menu-use-cwd-p) default-directory)))
@@ -1964,6 +1989,34 @@ Clear saved model or effort defaults that the new provider does not support."
 (defun agnostic-llm--menu-effort-description ()
   "Description for the effort switch showing the current default."
   (format "Effort [%s]" (or agnostic-llm-effort "default")))
+
+(defmacro agnostic-llm--define-menu-option (name option &rest properties)
+  "Define transient infix NAME for semantic OPTION with PROPERTIES."
+  (declare (indent 2))
+  `(transient-define-infix ,name ()
+     :argument ,(alist-get option agnostic-llm--transient-option-vocabulary)
+     ,@properties))
+
+(agnostic-llm--define-menu-option agnostic-llm--menu-btw-option btw
+  :description "Prepend /btw slash-command to inline prompts")
+
+(agnostic-llm--define-menu-option agnostic-llm--menu-cwd-option cwd
+  :description "Use current directory (not project root)")
+
+(agnostic-llm--define-menu-option agnostic-llm--menu-dangerous-option dangerous
+  :description "Dangerously skip permission prompts")
+
+(agnostic-llm--define-menu-option agnostic-llm--menu-model-option model
+  :class 'transient-option
+  :description #'agnostic-llm--menu-model-description
+  :choices (lambda () (agnostic-llm-model-choices)))
+
+(agnostic-llm--define-menu-option agnostic-llm--menu-effort-option effort
+  :class 'transient-option
+  :description #'agnostic-llm--menu-effort-description
+  :choices (lambda ()
+             (agnostic-llm-effort-choices-for-model
+              (agnostic-llm--menu-current-model))))
 
 (defun agnostic-llm--menu-header ()
   "Return the options-group title, flagging any pinned session override.
@@ -1988,14 +2041,11 @@ ROOT and LABEL, when supplied (e.g. by an integration such as org-glance), pin
 the session to that directory and buffer name instead of deriving them from the
 current project; the header highlights the override."
   [:description agnostic-llm--menu-header
-   ("-b" "Prepend /btw slash-command to inline prompts" "--btw")
-   ("-c" "Use current directory (not project root)"     "-c")
-   ("-d" "Dangerously skip permission prompts"          "--dangerously-skip-permissions")
-   ("-m" agnostic-llm--menu-model-description                    "--model="
-    :choices (lambda () (agnostic-llm-model-choices)))
-   ("-e" agnostic-llm--menu-effort-description                   "--effort="
-    :choices (lambda ()
-               (agnostic-llm-effort-choices-for-model (agnostic-llm--menu-current-model))))]
+   ("-b" agnostic-llm--menu-btw-option)
+   ("-c" agnostic-llm--menu-cwd-option)
+   ("-d" agnostic-llm--menu-dangerous-option)
+   ("-m" agnostic-llm--menu-model-option)
+   ("-e" agnostic-llm--menu-effort-option)]
   [["Session"
     ("c" agnostic-llm--menu-open-session)
     ("v" "Vterm in project"       agnostic-llm-vterm-here)

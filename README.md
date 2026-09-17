@@ -101,6 +101,10 @@ add it to your `load-path`:
 
 The `-m` (model), `-e` (effort), `-d` (skip permissions), `-c` (current dir),
 and `-b` (`/btw` prefix) switches apply to the launched command.
+The menu exports one provider-neutral option vocabulary. Each provider's
+`:option-vocabulary` derives its native argv from those semantic options—for
+example, `-d` becomes `--dangerously-skip-permissions` for Claude and `--yolo`
+for Codex.
 
 ### Prompt and bubble keys
 
@@ -142,6 +146,8 @@ and `-b` (`/btw` prefix) switches apply to the launched command.
 (setq agnostic-llm-effort "medium")
 
 ;; CLI-specific settings live in a provider plist; `claude' is the default.
+;; Native option spellings are declared once in :option-vocabulary. A "%s"
+;; token is replaced by the selected value.
 ;; Add a model to the claude provider (newest-first; first = CLI default;
 ;; each entry needs its own :efforts, no fallback):
 (push '("claude-opus-5" :efforts ("default" "low" "medium" "high" "max" "ultracode"))
