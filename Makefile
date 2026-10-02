@@ -77,7 +77,8 @@ rev:   BUMP := rev
 major minor patch build rev: bump-version
 
 bump-version:
-	@cur=`sed -n 's/^;; Package-Version: *\([0-9.]*\).*/\1/p' $(PACKAGE)`; \
+	@set -e; \
+	cur=`sed -n 's/^;; Package-Version: *\([0-9.]*\).*/\1/p' $(PACKAGE)`; \
 	test -n "$$cur" || { echo "error: could not read version from $(PACKAGE)"; exit 1; }; \
 	set -- `echo "$$cur" | tr '.' ' '`; \
 	maj=$${1:-0}; min=$${2:-0}; pat=$${3:-0}; bld=$${4:-0}; olddate=$${5:-0}; rev=$${6:-0}; \
@@ -91,6 +92,8 @@ bump-version:
 	  *) echo "usage: make major|minor|patch|build|rev"; exit 1 ;; \
 	esac; \
 	new="$$maj.$$min.$$pat.$$bld.$$today.$$rev"; \
-	sed -i "s/^;; Package-Version: .*/;; Package-Version: $$new/" $(PACKAGE); \
+	tmp=`mktemp "$(PACKAGE).XXXXXX"`; \
+	trap 'rm -f "$$tmp"' 0; \
+	sed "s/^;; Package-Version: .*/;; Package-Version: $$new/" $(PACKAGE) > "$$tmp"; \
+	cat "$$tmp" > $(PACKAGE); \
 	echo "agnostic-llm: $$cur -> $$new"
-

@@ -3,7 +3,7 @@
 ;; Copyright (c) 2026 Dmitry Akatov
 ;; Author: Dmitry Akatov <dmitry.akatov@protonmail.com>
 ;; URL: https://github.com/rails-to-cosmos/agnostic-llm
-;; Package-Version: 0.10.0.0.20260922.0
+;; Package-Version: 0.11.0.0.20261002.0
 ;; Package-Requires: ((emacs "28.1") (transient "0.4.0") (vterm "0.0.2"))
 ;; Keywords: convenience, tools
 
@@ -1858,15 +1858,20 @@ from each provider's `:option-vocabulary'."))
   (member (agnostic-llm--transient-option option)
           (transient-args 'agnostic-llm-menu)))
 
-(defun agnostic-llm--menu-option-value (option)
-  "Return transient OPTION's value, or nil for an unset/default value."
+(defun agnostic-llm--menu-option-value-from (option arguments)
+  "Return transient OPTION's value in ARGUMENTS, or nil for default."
   (let* ((prefix (agnostic-llm--transient-option option))
          (value (cl-some (lambda (argument)
                            (and (stringp argument)
                                 (string-prefix-p prefix argument)
                                 (substring argument (length prefix))))
-                         (transient-args 'agnostic-llm-menu))))
+                         arguments)))
     (unless (equal value "default") value)))
+
+(defun agnostic-llm--menu-option-value (option)
+  "Return transient OPTION's submitted value, or nil for default."
+  (agnostic-llm--menu-option-value-from
+   option (transient-args 'agnostic-llm-menu)))
 
 (defun agnostic-llm--menu-dangerous-p ()
   "Return non-nil if the menu's `-d' switch is active for this invocation."
@@ -1983,12 +1988,18 @@ Clear saved model or effort defaults that the new provider does not support."
     (agnostic-llm root label)))
 
 (defun agnostic-llm--menu-model-description ()
-  "Description for the model switch showing the current default."
-  (format "Model [%s]" (or agnostic-llm-model "default")))
+  "Return the model switch label with its current menu value."
+  (format "Model [%s]"
+          (or (agnostic-llm--menu-option-value-from 'model
+                                                    (transient-get-value))
+              agnostic-llm-model "default")))
 
 (defun agnostic-llm--menu-effort-description ()
-  "Description for the effort switch showing the current default."
-  (format "Effort [%s]" (or agnostic-llm-effort "default")))
+  "Return the effort switch label with its current menu value."
+  (format "Effort [%s]"
+          (or (agnostic-llm--menu-option-value-from 'effort
+                                                    (transient-get-value))
+              agnostic-llm-effort "default")))
 
 (defmacro agnostic-llm--define-menu-option (name option &rest properties)
   "Define transient infix NAME for semantic OPTION with PROPERTIES."

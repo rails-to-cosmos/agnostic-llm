@@ -238,6 +238,29 @@ would fail to match \"claude-sonnet-5\" and silently lose \"ultracode\"."
     (should (equal (agnostic-llm--menu-option-value 'model) "gpt-6-astra"))
     (should (equal (agnostic-llm--menu-option-value 'effort) "medium"))))
 
+(ert-deftest test-transient-model-and-effort-labels-show-selected-values ()
+  "Model and effort labels reflect live menu overrides and defaults."
+  (let ((agnostic-llm-model "saved-model")
+        (agnostic-llm-effort "low")
+        (arguments '("--model=gpt-6-astra" "--effort=high")))
+    (cl-letf (((symbol-function 'transient-get-value)
+               (lambda () arguments)))
+      (should (equal (agnostic-llm--menu-model-description)
+                     "Model [gpt-6-astra]"))
+      (should (equal (agnostic-llm--menu-effort-description)
+                     "Effort [high]"))
+      (setq arguments '("--model=default" "--effort=default"))
+      (should (equal (agnostic-llm--menu-model-description)
+                     "Model [saved-model]"))
+      (should (equal (agnostic-llm--menu-effort-description)
+                     "Effort [low]"))
+      (setq agnostic-llm-model nil
+            agnostic-llm-effort nil)
+      (should (equal (agnostic-llm--menu-model-description)
+                     "Model [default]"))
+      (should (equal (agnostic-llm--menu-effort-description)
+                     "Effort [default]")))))
+
 (ert-deftest test-transient-infixes-use-canonical-vocabulary ()
   "The menu's infixes are generated from its canonical vocabulary."
   (dolist (pair '((btw . agnostic-llm--menu-btw-option)
