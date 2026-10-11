@@ -120,13 +120,6 @@ minor version."
   (should (equal (agnostic-llm--model-split "claude-sonnet-5-20260301")
                  '("sonnet" (5)))))
 
-(ert-deftest test-version< ()
-  "Shorter version lists sort before longer ones sharing a prefix."
-  (should (agnostic-llm--version< '(4) '(4 8)))
-  (should (agnostic-llm--version< '(4 6) '(4 8)))
-  (should-not (agnostic-llm--version< '(4 8) '(4 8)))
-  (should-not (agnostic-llm--version< '(5) '(4 8))))
-
 (ert-deftest test-effort-exact-name-has-ultracode ()
   "An exact name with declared efforts offers `ultracode'."
   (test-agnostic-llm--with-models test-agnostic-llm--models
@@ -141,10 +134,11 @@ minor version."
       (should (equal choices '("default" "low" "medium" "high" "max"))))))
 
 (ert-deftest test-effort-bare-alias-newest ()
-  "A bare alias resolves to the newest family entry (here, with `ultracode')."
-  (test-agnostic-llm--with-models test-agnostic-llm--models
-    (should (member "ultracode"
-                    (agnostic-llm-effort-choices-for-model "opus")))))
+  "A bare alias resolves to the newest version in its family."
+  (test-agnostic-llm--with-models
+      '(("claude-opus-5" . (:efforts ("new")))
+        ("claude-opus-4-8" . (:efforts ("old"))))
+    (should (equal (agnostic-llm-effort-choices-for-model "opus") '("new")))))
 
 (ert-deftest test-effort-bare-alias-lower-versions-explicit ()
   "A bare alias resolves to its family's newest entry and its declared efforts."
@@ -169,10 +163,11 @@ would fail to match \"claude-sonnet-5\" and silently lose \"ultracode\"."
                      "claude-sonnet-5-20260301")))))
 
 (ert-deftest test-effort-nil-model-is-first-entry ()
-  "Nil model resolves to the first table entry (offers `ultracode' here)."
-  (test-agnostic-llm--with-models test-agnostic-llm--models
-    (should (member "ultracode"
-                    (agnostic-llm-effort-choices-for-model nil)))))
+  "Nil model resolves to the first table entry."
+  (test-agnostic-llm--with-models
+      '(("claude-first-1" . (:efforts ("first")))
+        ("claude-second-2" . (:efforts ("second"))))
+    (should (equal (agnostic-llm-effort-choices-for-model nil) '("first")))))
 
 (ert-deftest test-effort-unknown-model-nil ()
   "An unknown model has no declared efforts, so lookup returns nil."
@@ -293,7 +288,7 @@ would fail to match \"claude-sonnet-5\" and silently lose \"ultracode\"."
                      '("codex" "--sid" "ABC" "-q" "hi"))))))
 
 (ert-deftest test-session-shell-command-uses-provider-executable ()
-  "A fresh session's shell command is the provider executable plus set flags."
+  "Session commands continue existing sessions unless requested fresh."
   (let ((dir (make-temp-file "agnostic-llm-test-" t)))
     (unwind-protect
         (test-agnostic-llm--with-provider
@@ -307,11 +302,15 @@ would fail to match \"claude-sonnet-5\" and silently lose \"ultracode\"."
                 (agnostic-llm-model nil)
                 (agnostic-llm-effort nil)
                 (agnostic-llm-dangerously-skip-permissions nil))
-            (should (equal (agnostic-llm--session-shell-command dir) "codex"))
+            (let ((session-dir (agnostic-llm--session-dir dir)))
+              (make-directory session-dir t)
+              (with-temp-file (expand-file-name "session.jsonl" session-dir)))
+            (should (equal (agnostic-llm--session-shell-command dir) "codex -c"))
+            (should (equal (agnostic-llm--session-shell-command dir t) "codex"))
             (let ((agnostic-llm-model "m")
                   (agnostic-llm-dangerously-skip-permissions t))
               (should (equal (agnostic-llm--session-shell-command dir)
-                             "codex --model m --yolo")))))
+                             "codex -c --model m --yolo")))))
       (delete-directory dir t))))
 
 (ert-deftest test-shell-argv-execs-through-user-shell ()
@@ -432,8 +431,7 @@ A plain `*vterm:…*' buffer is not recognized."
 
 (ert-deftest test-cycle-buffer-discovers-unregistered-session-buffers ()
   "Cycling visits every live session-prefixed buffer without a registry."
-  (let ((agnostic-llm--buffers (make-hash-table :test 'eq))
-        (first (get-buffer-create "*llm:cycle-a*"))
+  (let ((first (get-buffer-create "*llm:cycle-a*"))
         (second (get-buffer-create "*llm:cycle-b*"))
         (response (get-buffer-create "*llm-response:cycle-a*")))
     (unwind-protect

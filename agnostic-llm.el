@@ -3,7 +3,7 @@
 ;; Copyright (c) 2026 Dmitry Akatov
 ;; Author: Dmitry Akatov <dmitry.akatov@protonmail.com>
 ;; URL: https://github.com/rails-to-cosmos/agnostic-llm
-;; Package-Version: 0.11.1.0.20261011.0
+;; Package-Version: 0.11.1.0.20261011.1
 ;; Package-Requires: ((emacs "28.1") (transient "0.4.0") (vterm "0.0.2"))
 ;; Keywords: convenience, tools
 
@@ -42,11 +42,6 @@
 (require 'transient)
 (require 'ansi-color)
 (require 'vterm)
-
-(defvar vterm-copy-mode)
-(defvar vterm-mode-map)
-(defvar vterm-copy-mode-hook)
-(defvar vterm--process)
 
 ;;; Customization
 
@@ -162,7 +157,7 @@ The provider's `:option-vocabulary' maps OPTION to an argv template.  Each
 \"%s\" occurrence in that template is replaced with VALUE.  A nil VALUE means
 the option is inactive and produces no arguments."
   (when value
-    (when-let ((template
+    (when-let* ((template
                 (cdr (assq option
                            (agnostic-llm--provider-get :option-vocabulary)))))
       (mapcar (lambda (word)
@@ -204,13 +199,12 @@ the CLI under Emacs's own environment."
   (mapconcat #'shell-quote-argument (agnostic-llm--shell-argv command) " "))
 
 (defun agnostic-llm--open-vterm (name command &optional same-window)
-  "Open a registered LLM vterm NAME running COMMAND via `agnostic-llm--shell-wrap'.
+  "Open an LLM vterm NAME running COMMAND via `agnostic-llm--shell-wrap'.
 Pops to another window unless SAME-WINDOW."
   (let ((vterm-shell (agnostic-llm--shell-wrap command))
         (provider agnostic-llm-provider))
     (if same-window (vterm name) (vterm-other-window name))
-    (setq-local agnostic-llm-provider provider)
-    (agnostic-llm--register-buffer (current-buffer))))
+    (setq-local agnostic-llm-provider provider)))
 
 (defcustom agnostic-llm-project-root-markers
   '(".git" ".claude" "CLAUDE.md" ".codex" "AGENTS.md")
@@ -252,7 +246,7 @@ vterm and to the inline bubble (captured once at bubble creation)."
 ;; A model name may be a full id ("claude-opus-4-8"), a date-suffixed id
 ;; ("claude-haiku-4-5-20251001"), or a bare family alias ("opus").
 ;; `agnostic-llm--model-split' breaks a name into (FAMILY NUMS), and
-;; `agnostic-llm--version<' orders version lists so a bare alias resolves
+;; `version-list-<' orders version lists so a bare alias resolves
 ;; to its family's newest entry.  `agnostic-llm--model-spec' ties these
 ;; together, returning the declarative provider `:models' entry that
 ;; governs a model's effort levels.
@@ -273,21 +267,13 @@ the 20251001 in \"haiku-4-5-20251001\") are ignored."
                              (not (string-match-p "\\`[0-9]\\{8\\}\\'" p)))
                    collect (string-to-number p)))))
 
-(defun agnostic-llm--version< (a b)
-  "Non-nil when version list A precedes B (lexicographic on integers).
-A missing component sorts before a present one, so (4) precedes (4 8)."
-  (cond ((null a) (and b t))
-        ((null b) nil)
-        ((= (car a) (car b)) (agnostic-llm--version< (cdr a) (cdr b)))
-        (t (< (car a) (car b)))))
-
 (defun agnostic-llm--model-spec (model)
   "Return the provider `:models' entry for MODEL, or nil when unknown.
 Nil MODEL resolves to the first entry (the provider's default model).  A
 full name matches by `assoc'; a date-suffixed id (e.g.
 \"claude-haiku-4-5-20251001\") matches the entry with the same family and
 version; a bare alias (e.g. \"opus\") matches that family's newest entry
-ordered by `agnostic-llm--version<'."
+ordered by `version-list-<'."
   (let ((models (agnostic-llm--models)))
     (if (null model)
         (car models)
@@ -307,7 +293,7 @@ ordered by `agnostic-llm--version<'."
                       (agnostic-llm--model-split (car entry))
                     (when (and (equal fam family) enums
                                (or (null best-nums)
-                                   (agnostic-llm--version< best-nums enums)))
+                                   (version-list-< best-nums enums)))
                       (setq best entry best-nums enums))))))))))))
 
 ;;; Reasoning effort
@@ -360,7 +346,7 @@ and share one `*llm:~*' buffer."
   (if agnostic-llm--root-override
       (file-name-as-directory (expand-file-name agnostic-llm--root-override))
     (let ((home (expand-file-name "~/")))
-      (or (when-let ((root (locate-dominating-file
+      (or (when-let* ((root (locate-dominating-file
                             dir
                             (lambda (parent)
                               (and (not (file-equal-p parent home))
@@ -429,21 +415,6 @@ Honors `agnostic-llm-persistence-strategy'.  SUBPATH is relative (e.g.
 
 ;;; LLM vterm buffer management
 
-(defvar agnostic-llm--buffers (make-hash-table :test 'eq)
-  "Registry of live LLM vterm buffers (used as a set; keys only).")
-
-(defun agnostic-llm--register-buffer (buf)
-  "Register BUF as an LLM buffer."
-  (puthash buf t agnostic-llm--buffers))
-
-(defun agnostic-llm--unregister-buffer (buf)
-  "Unregister BUF from the LLM buffer registry."
-  (remhash buf agnostic-llm--buffers))
-
-(defun agnostic-llm--get-buffers ()
-  "Return a list of all live LLM buffers."
-  (cl-remove-if-not #'buffer-live-p (hash-table-keys agnostic-llm--buffers)))
-
 (defun agnostic-llm--project-label (directory)
   "Return (LABEL . ROOT) for DIRECTORY.
 ROOT comes from `agnostic-llm--project-root' — the single source of truth for
@@ -466,6 +437,15 @@ by `agnostic-llm', `agnostic-llm--bubble-promote', and
 `agnostic-llm--session-buffer-prefix'."
   (format "%s%s*" agnostic-llm--session-buffer-prefix label))
 
+(defun agnostic-llm-buffer-p (&optional buffer)
+  "Return non-nil if BUFFER (default: current buffer) is an LLM buffer."
+  (string-prefix-p agnostic-llm--session-buffer-prefix
+                   (buffer-name (or buffer (current-buffer)))))
+
+(defun agnostic-llm--get-buffers ()
+  "Return all live LLM buffers."
+  (seq-filter #'agnostic-llm-buffer-p (buffer-list)))
+
 (defun agnostic-llm--session-dir (dir)
   "Return the provider's session-store path for DIR.
 DIR encodes into one component under `:session-dir' by replacing each `/'
@@ -475,14 +455,6 @@ claude's layout."
                   "[/.]" "-"
                   (directory-file-name (expand-file-name dir)))))
     (expand-file-name encoded (agnostic-llm--provider-get :session-dir))))
-
-(defun agnostic-llm--session-exists-p (dir)
-  "Return non-nil if DIR has at least one recorded provider session."
-  (if (agnostic-llm--provider-get :session-file-function)
-      (and (agnostic-llm--session-file dir) t)
-    (let ((sdir (agnostic-llm--session-dir dir)))
-      (and (file-directory-p sdir)
-           (directory-files sdir nil (agnostic-llm--provider-get :session-file-regexp) t)))))
 
 (defun agnostic-llm--shell-command-from-argv (argv)
   "Return a safely shell-quoted command string for ARGV."
@@ -509,7 +481,7 @@ session.  Appends the provider vocabulary's `model', `effort', and
 `dangerous' arguments when `agnostic-llm-model', `agnostic-llm-effort', and
 `agnostic-llm-dangerously-skip-permissions' are respectively set.  With
 FRESH, never continue; with RESUME-ID, resume that exact session."
-  (if-let ((builder (agnostic-llm--provider-get :session-command-function)))
+  (if-let* ((builder (agnostic-llm--provider-get :session-command-function)))
       (funcall builder root fresh resume-id agnostic-llm-model agnostic-llm-effort
                agnostic-llm-dangerously-skip-permissions)
     (let* ((exe (agnostic-llm--provider-get :executable))
@@ -517,7 +489,7 @@ FRESH, never continue; with RESUME-ID, resume that exact session."
                   (resume-id
                    (format "%s %s %s" exe (agnostic-llm--provider-get :resume-flag)
                            (shell-quote-argument resume-id)))
-                  ((and (not fresh) (agnostic-llm--session-exists-p root))
+                  ((and (not fresh) (agnostic-llm--session-file root))
                    (concat exe " " (agnostic-llm--provider-get :continue-flag)))
                   (t exe)))
            (options (agnostic-llm--provider-options-args
@@ -560,6 +532,11 @@ or display plumbing."
       (cons (replace-regexp-in-string "\\\\/" "/" (match-string-no-properties 1))
             (match-string-no-properties 2)))))
 
+(defun agnostic-llm--file-newer-p (a b)
+  "Return non-nil when file A was modified after file B."
+  (time-less-p (file-attribute-modification-time (file-attributes b))
+               (file-attribute-modification-time (file-attributes a))))
+
 (defun agnostic-llm--codex-session-file (dir &optional interactive-only)
   "Return the newest Codex rollout belonging to project DIR.
 With INTERACTIVE-ONLY, exclude sessions created by `codex exec'."
@@ -576,25 +553,19 @@ With INTERACTIVE-ONLY, exclude sessions created by `codex exec'."
                 (equal wanted (file-name-as-directory (file-truename cwd))))))
        (sort (directory-files-recursively
               root (agnostic-llm--provider-get :session-file-regexp))
-             (lambda (a b)
-               (time-less-p (file-attribute-modification-time (file-attributes b))
-                            (file-attribute-modification-time (file-attributes a)))))))))
+             #'agnostic-llm--file-newer-p)))))
 
 (defun agnostic-llm--session-file (dir)
   "Return the newest session transcript file for DIR, or nil if none.
 Files under `agnostic-llm--session-dir' matching `:session-file-regexp'
 are ranked by mtime, so the session the live CLI is appending wins (names
 are random UUIDs, so name order is meaningless)."
-  (if-let ((finder (agnostic-llm--provider-get :session-file-function)))
+  (if-let* ((finder (agnostic-llm--provider-get :session-file-function)))
       (funcall finder dir)
     (let ((sdir (agnostic-llm--session-dir dir)))
       (when (file-directory-p sdir)
         (car (sort (directory-files sdir t (agnostic-llm--provider-get :session-file-regexp) t)
-                   (lambda (a b)
-                     (time-less-p (file-attribute-modification-time
-                                   (file-attributes b))
-                                  (file-attribute-modification-time
-                                   (file-attributes a))))))))))
+                   #'agnostic-llm--file-newer-p))))))
 
 (defun agnostic-llm--session-records (file)
   "Parse FILE (JSONL) into a list of alists, in file order.
@@ -680,7 +651,7 @@ intentionally dropped — this is the prose reply."
 
 (defun agnostic-llm--provider-extract-last-response (records)
   "Extract the latest response from provider session RECORDS."
-  (if-let ((extractor (agnostic-llm--provider-get :extract-response-function)))
+  (if-let* ((extractor (agnostic-llm--provider-get :extract-response-function)))
       (funcall extractor records)
     (agnostic-llm--extract-last-response records)))
 
@@ -799,26 +770,6 @@ With prefix: always create a new vterm buffer."
             (switch-to-buffer (car vterm-bufs))
           (vterm base))))))
 
-;;; LLM vterm buffer predicate
-
-(defun agnostic-llm-buffer-p (&optional buf)
-  "Return non-nil if BUF (default: current buffer) is an LLM vterm buffer."
-  (string-prefix-p agnostic-llm--session-buffer-prefix
-                   (buffer-name (or buf (current-buffer)))))
-
-;; Unregister dead buffers on re-eval.
-(when (hash-table-p agnostic-llm--buffers)
-  (maphash (lambda (buf _status)
-             (unless (buffer-live-p buf)
-               (remhash buf agnostic-llm--buffers)))
-           agnostic-llm--buffers))
-
-(defun agnostic-llm--cleanup-buffer ()
-  "Unregister the current buffer from the LLM buffer list."
-  (agnostic-llm--unregister-buffer (current-buffer)))
-
-(add-hook 'kill-buffer-hook #'agnostic-llm--cleanup-buffer)
-
 ;;; Prompt Mode
 
 (defun agnostic-llm--prompt-capf ()
@@ -834,7 +785,7 @@ Offers project-relative file paths when the point follows `@'."
             (list start end
                   (completion-table-dynamic
                    (lambda (_)
-                     (when-let ((proj (project-current nil root)))
+                     (when-let* ((proj (project-current nil root)))
                        (mapcar (lambda (f) (file-relative-name f root))
                                (project-files proj)))))
                   :exclusive 'no
@@ -902,10 +853,6 @@ current one."
   (let ((file (make-temp-file "agnostic-llm-context-" nil ".txt")))
     (with-temp-file file (insert text))
     file))
-
-(defun agnostic-llm--present-prompt-buffer (buf)
-  "Show BUF in a window for editing, like `org-capture'."
-  (pop-to-buffer buf))
 
 ;;; Bubble (inline-response) mode
 
@@ -981,6 +928,19 @@ permission posture.")
 (defvar-local agnostic-llm--bubble-json-remainder ""
   "Incomplete JSONL event fragment held between `process-filter' calls.")
 
+(defun agnostic-llm--prepare-bubble-buffer (root)
+  "Initialize the current buffer as a bubble rooted at ROOT."
+  (agnostic-llm-prompt-mode)
+  (erase-buffer)
+  (setq-local agnostic-llm--prompt-project-root root)
+  (setq-local agnostic-llm--prompt-bubble t)
+  (setq-local agnostic-llm--bubble-provider agnostic-llm-provider)
+  (setq-local agnostic-llm--bubble-session-id
+              (agnostic-llm--bubble-initial-session-id))
+  (setq-local agnostic-llm--bubble-dangerous agnostic-llm-dangerously-skip-permissions)
+  (setq-local agnostic-llm--bubble-model agnostic-llm-model)
+  (setq-local agnostic-llm--bubble-effort agnostic-llm-effort))
+
 (defun agnostic-llm--bubble-thinking-string (tick)
   "Return the animated dots string for TICK (1–3 dots)."
   (propertize (make-string (1+ (mod tick 3)) ?.)
@@ -1050,7 +1010,7 @@ all popup turns as one conversation.  Prepends
 `agnostic-llm-bubble-prompt-prefix' to PROMPT; translates the bubble's model,
 effort, and dangerous values through the active provider's option vocabulary."
   (let ((text (concat agnostic-llm-bubble-prompt-prefix prompt)))
-    (if-let ((builder (agnostic-llm--provider-get :bubble-command-function)))
+    (if-let* ((builder (agnostic-llm--provider-get :bubble-command-function)))
         (funcall builder text agnostic-llm--bubble-session-id
                  agnostic-llm--bubble-model agnostic-llm--bubble-effort
                  agnostic-llm--bubble-dangerous)
@@ -1088,23 +1048,11 @@ On the first chunk, replaces the `thinking' indicator with the
 LLM turn marker."
   (when (buffer-live-p (process-buffer proc))
     (with-current-buffer (process-buffer proc)
-      (let ((inhibit-read-only t)
-            (first-chunk (overlayp agnostic-llm--bubble-thinking-overlay))
-            (was-at-end (= (point) (point-max)))
-            (cleaned (agnostic-llm--bubble-clean-chunk chunk)))
-        (when first-chunk
-          (agnostic-llm--bubble-stop-thinking (current-buffer))
-          (save-excursion
-            (goto-char (point-max))
-            (insert (propertize "— " 'face 'agnostic-llm-bubble-user-face))))
-        (save-excursion
-          (goto-char (point-max))
-          (insert cleaned))
-        (when (or first-chunk was-at-end)
-          (goto-char (point-max)))))))
+      (agnostic-llm--bubble-insert-output
+       (agnostic-llm--bubble-clean-chunk chunk)))))
 
-(defun agnostic-llm--bubble-json-insert-message (text)
-  "Append a Codex JSON-event message TEXT to the current bubble."
+(defun agnostic-llm--bubble-insert-output (text)
+  "Append provider output TEXT to the current bubble."
   (let ((inhibit-read-only t)
         (first-message (overlayp agnostic-llm--bubble-thinking-overlay))
         (was-at-end (= (point) (point-max))))
@@ -1141,10 +1089,10 @@ LLM turn marker."
                 ("item.completed"
                  (let ((item (alist-get 'item event)))
                    (when (equal (alist-get 'type item) "agent_message")
-                     (agnostic-llm--bubble-json-insert-message
+                     (agnostic-llm--bubble-insert-output
                       (or (alist-get 'text item) "")))))
                 ("error"
-                 (agnostic-llm--bubble-json-insert-message
+                 (agnostic-llm--bubble-insert-output
                   (format "[Codex error: %s]"
                           (or (alist-get 'message event) "unknown error"))))))))))))
 
@@ -1351,18 +1299,14 @@ untouched."
                   (generate-new-buffer "*agnostic-llm-bubble*")
                 (get-buffer-create "*agnostic-llm-prompt*"))))
     (with-current-buffer buf
-      (agnostic-llm-prompt-mode)
-      (erase-buffer)
+      (if bubble
+          (agnostic-llm--prepare-bubble-buffer root)
+        (agnostic-llm-prompt-mode)
+        (erase-buffer)
+        (setq-local agnostic-llm--prompt-project-root root)
+        (setq-local agnostic-llm--prompt-bubble nil))
       (setq-local agnostic-llm--prompt-context-prefix prefix)
-      (setq-local agnostic-llm--prompt-project-root root)
-      (setq-local agnostic-llm--prompt-bubble bubble)
       (when bubble
-        (setq-local agnostic-llm--bubble-provider agnostic-llm-provider)
-        (setq-local agnostic-llm--bubble-session-id
-                    (agnostic-llm--bubble-initial-session-id))
-        (setq-local agnostic-llm--bubble-dangerous agnostic-llm-dangerously-skip-permissions)
-        (setq-local agnostic-llm--bubble-model agnostic-llm-model)
-        (setq-local agnostic-llm--bubble-effort agnostic-llm-effort)
         (goto-char (point-max))
         (insert (propertize "— " 'face 'agnostic-llm-bubble-user-face))
         (setq-local agnostic-llm--bubble-input-start (copy-marker (point) nil))
@@ -1370,18 +1314,13 @@ untouched."
               (propertize
                " LLM  C-c C-c send · C-c C-k close · C-c C-m →llm"
                'face 'agnostic-llm-bubble-header-face))))
-    (agnostic-llm--present-prompt-buffer buf)))
+    (pop-to-buffer buf)))
 
 ;;; Prompt History
 
-(defun agnostic-llm--prompts-dir (&optional root)
-  "Return the absolute path to ROOT's prompt directory.
-Honors `agnostic-llm-persistence-strategy'."
-  (agnostic-llm--persistence-dir (or root (agnostic-llm--current-root)) "prompts"))
-
-(defun agnostic-llm--prompt-history-files (&optional root)
+(defun agnostic-llm--prompt-history-files (root)
   "Return ROOT's saved prompt files, newest first."
-  (let ((dir (agnostic-llm--prompts-dir root)))
+  (let ((dir (agnostic-llm--persistence-dir root "prompts")))
     (when (file-directory-p dir)
       (sort (directory-files dir t "\\.txt\\'") #'string>))))
 
@@ -1399,7 +1338,7 @@ Honors `agnostic-llm-persistence-strategy'."
       (erase-buffer)
       (insert text)
       (setq-local agnostic-llm--prompt-project-root root))
-    (agnostic-llm--present-prompt-buffer buf)))
+    (pop-to-buffer buf)))
 
 ;;;###autoload
 (defun agnostic-llm-prompt-history ()
@@ -1444,9 +1383,8 @@ for editing and re-sending."
     (((background light)) :background "#d4f4d4" :extend t))
   "Face applied to lines added or changed in the last auto-revert.")
 
-(defvar agnostic-llm--pre-revert-contents (make-hash-table :test 'equal)
-  "Hash-table of absolute file path to pre-revert buffer text.
-Each entry is captured just before `auto-revert-mode' reverts the file.")
+(defvar-local agnostic-llm--pre-revert-contents nil
+  "Buffer text captured just before `auto-revert-mode' reverts it.")
 
 (defvar-local agnostic-llm--change-highlight-timer nil
   "Buffer-local idle timer that removes `agnostic-llm-change-highlight' overlays.")
@@ -1464,15 +1402,13 @@ Also cancels the auto-clear timer if one is pending."
 (defun agnostic-llm--before-revert-save ()
   "Hook: capture buffer text before `auto-revert-mode' reverts it."
   (when (buffer-file-name)
-    (puthash (buffer-file-name)
-             (buffer-substring-no-properties (point-min) (point-max))
-             agnostic-llm--pre-revert-contents)))
+    (setq agnostic-llm--pre-revert-contents
+          (buffer-substring-no-properties (point-min) (point-max)))))
 
 (defun agnostic-llm--after-revert-highlight ()
   "Hook: highlight lines in the reverted buffer that differ from the snapshot."
-  (when-let* ((file  (buffer-file-name))
-              (old   (gethash file agnostic-llm--pre-revert-contents)))
-    (remhash file agnostic-llm--pre-revert-contents)
+  (when-let* ((old agnostic-llm--pre-revert-contents))
+    (setq agnostic-llm--pre-revert-contents nil)
     (let* ((new   (buffer-substring-no-properties (point-min) (point-max)))
            (lines (agnostic-llm--diff-added-lines old new))
            (buf   (current-buffer)))
@@ -1535,14 +1471,9 @@ where the timer fires but nothing actually changed on disk)."
 (defun agnostic-llm--cycle-buffer (direction)
   "Switch current window to the next/previous LLM buffer.
 DIRECTION is +1 (forward) or -1 (backward)."
-  (let ((bufs
-         (sort (seq-filter
-                (lambda (buffer)
-                  (string-prefix-p agnostic-llm--session-buffer-prefix
-                                   (buffer-name buffer)))
-                (buffer-list))
-               (lambda (a b)
-                 (string< (buffer-name a) (buffer-name b))))))
+  (let ((bufs (sort (agnostic-llm--get-buffers)
+                    (lambda (a b)
+                      (string< (buffer-name a) (buffer-name b))))))
     (unless bufs (user-error "No LLM buffers"))
     (let* ((pos (cl-position (current-buffer) bufs))
            (next (if pos
@@ -2137,17 +2068,8 @@ buffer name is used as context instead."
          (buf (generate-new-buffer "*agnostic-llm-bubble*")))
     (when region-p (deactivate-mark))
     (with-current-buffer buf
-      (agnostic-llm-prompt-mode)
-      (erase-buffer)
-      (setq-local agnostic-llm--prompt-project-root root)
-      (setq-local agnostic-llm--prompt-bubble t)
-      (setq-local agnostic-llm--bubble-provider agnostic-llm-provider)
-      (setq-local agnostic-llm--bubble-session-id
-                  (agnostic-llm--bubble-initial-session-id))
-      (setq-local agnostic-llm--bubble-dangerous agnostic-llm-dangerously-skip-permissions)
-      (setq-local agnostic-llm--bubble-model agnostic-llm-model)
-      (setq-local agnostic-llm--bubble-effort agnostic-llm-effort))
-    (agnostic-llm--present-prompt-buffer buf)
+      (agnostic-llm--prepare-bubble-buffer root))
+    (pop-to-buffer buf)
     (with-current-buffer buf
       (agnostic-llm--bubble-spawn-turn text))))
 
@@ -2173,171 +2095,6 @@ resize corrects the mismatch once the buffer is displayed."
         (when (and (buffer-live-p buf)
                    (get-buffer-window buf))
           (window--adjust-process-windows))))))
-
-;;; Vterm copy helper (for TUIs that redraw and stomp on selections)
-
-(defvar-local agnostic-llm--vterm-copy-resume nil
-  "Non-nil when exiting `vterm-copy-mode' should resume a suspended process.
-Set in a buffer whose foreground process `agnostic-llm-vterm-copy'
-suspended.")
-
-(defun agnostic-llm--vterm-copy-resume-on-exit ()
-  "Send `fg' when copy-mode is disabled in a buffer flagged for resume."
-  (when (and agnostic-llm--vterm-copy-resume (not vterm-copy-mode))
-    (process-send-string vterm--process "fg\n")
-    (setq-local agnostic-llm--vterm-copy-resume nil)))
-
-(defun agnostic-llm-vterm-copy ()
-  "Suspend the foreground vterm process and enter `vterm-copy-mode'.
-Resumes the process automatically when copy-mode is exited.
-
-Useful for copying from TUIs (e.g. an interactive agentic CLI) that
-continuously redraw and overwrite selections.  No-op outside vterm."
-  (interactive)
-  ;; (unless (derived-mode-p 'vterm-mode)
-  ;;   (user-error "Not a vterm buffer"))
-  ;; (process-send-string vterm--process "\C-z")
-  ;; (setq-local agnostic-llm--vterm-copy-resume t)
-  ;; (vterm-copy-mode 1)
-  )
-
-;;; Vterm auto-freeze: scroll up to read history, type or q to resume
-;;
-;; vterm forces buffer point to the terminal cursor (bottom) on every redraw
-;; (vterm-module.c term_redraw -> adjust_topline, unconditional), so a
-;; streaming agentic CLI makes scrollback unreadable.  There is NO
-;; public "disable follow" knob; the only sanctioned freeze is
-;; `vterm-copy-mode', which sends XOFF (`<stop>' -> tcflow TCOOFF) so the
-;; child PAUSES and no further output arrives to trigger the redraw.  We do
-;; NOT pin window geometry around the filter (that caused the torn frames
-;; that were removed); we only OBSERVE point in `post-command-hook' and
-;; toggle the documented `vterm-copy-mode'.  Exiting it sends XON and snaps
-;; point back to the live cursor, resuming following.
-;;
-;; `window-scroll-functions' is deliberately NOT used: it runs during
-;; redisplay, where toggling a minor mode / writing to the pty is unsafe.
-;; Every user scroll (C-v, M-v) and point move is a command, so
-;; `post-command-hook' catches them without redisplay re-entry.
-
-(defvar vterm--term)
-(declare-function vterm-copy-mode "vterm" (&optional arg))
-(declare-function vterm-reset-cursor-point "vterm" ())
-
-(defcustom agnostic-llm-vterm-autofreeze-buffers #'agnostic-llm-buffer-p
-  "Predicate deciding whether auto-freeze is active in a vterm buffer.
-Called with no args in the vterm buffer; non-nil enables the behavior.
-Defaults to LLM buffers only, so plain `*vterm:…*' shells are untouched."
-  :type 'function
-  :group 'agnostic-llm)
-
-(defvar-local agnostic-llm--vterm-autofreeze-armed nil
-  "Guard so our own copy-mode toggles don't re-trigger the observer.")
-
-(defvar-local agnostic-llm--vterm-autofreeze-active nil
-  "Non-nil when copy-mode in this buffer was entered BY auto-freeze.
-As opposed to the manual `agnostic-llm-vterm-copy' workflow or a bare
-`vterm-copy-mode'.  Scopes the resume overlay map and the header-line so
-manual copy-mode keeps vanilla behavior.")
-
-(defun agnostic-llm--vterm-autofreeze-p ()
-  "Non-nil if auto-freeze should manage the current buffer."
-  (and (derived-mode-p 'vterm-mode)
-       (boundp 'vterm--term) vterm--term
-       (ignore-errors (funcall agnostic-llm-vterm-autofreeze-buffers))))
-
-(defun agnostic-llm--vterm-at-bottom-p ()
-  "Non-nil if point in the selected window is on the buffer's last line.
-That last line is the live prompt/cursor row vterm keeps pinned, so being
-there means we are following; being above it means the user scrolled up."
-  (>= (point)
-      (save-excursion (goto-char (point-max))
-                      (line-beginning-position))))
-
-(defun agnostic-llm--vterm-freeze ()
-  "Enter copy-mode to freeze the view (XOFF pauses the CLI).  Idempotent.
-Sets `agnostic-llm--vterm-autofreeze-active' so only our managed freeze gets the
-resume overlay map + header-line, and leaves `agnostic-llm--vterm-copy-resume' nil
-so exiting sends only XON, never the `fg' of the manual suspend path."
-  ;; (unless (or (bound-and-true-p vterm-copy-mode)
-  ;;             agnostic-llm--vterm-autofreeze-armed)
-  ;;   (let ((agnostic-llm--vterm-autofreeze-armed t))
-  ;;     (setq agnostic-llm--vterm-autofreeze-active t)
-  ;;     (vterm-copy-mode 1)
-  ;;     (setq header-line-format
-  ;;           " VTerm frozen — scroll to read · q quits · any key resumes")))
-  )
-
-(defun agnostic-llm--vterm-resume ()
-  "Exit copy-mode and snap point to the live cursor so output follows again.
-Safe to call when not frozen (no-op)."
-  (when (bound-and-true-p vterm-copy-mode)
-    (let ((agnostic-llm--vterm-autofreeze-armed t))
-      (vterm-copy-mode -1)        ; sends XON, restores vterm-mode-map
-      (vterm-reset-cursor-point)  ; point -> live terminal cursor (bottom)
-      (dolist (w (get-buffer-window-list (current-buffer) nil t))
-        (set-window-point w (point))))))
-
-(defun agnostic-llm--vterm-autofreeze-post-command ()
-  "`post-command-hook': freeze when point has moved up off the live line.
-Only fires from the command loop — never from vterm's redraw timer — so
-plain streaming with no keypress does NOT freeze; the user must actively
-scroll or move point up.  Skips mid-toggle calls via the armed guard."
-  (when (and (not agnostic-llm--vterm-autofreeze-armed)
-             (not (bound-and-true-p vterm-copy-mode))
-             (agnostic-llm--vterm-autofreeze-p)
-             (not (agnostic-llm--vterm-at-bottom-p)))
-    (agnostic-llm--vterm-freeze)))
-
-(defun agnostic-llm--vterm-resume-and-resend ()
-  "Thaw, then replay the triggering key into the live terminal.
-The key is not lost.  Bound to self-inserting keys while auto-frozen."
-  (interactive)
-  (let ((keys (this-command-keys-vector)))
-    (agnostic-llm--vterm-resume)
-    (setq unread-command-events
-          (append (listify-key-sequence keys) unread-command-events))))
-
-(defun agnostic-llm--vterm-resume-only ()
-  "Thaw without resending the key (viewer-style quit on `q')."
-  (interactive)
-  (agnostic-llm--vterm-resume))
-
-(defvar agnostic-llm--vterm-autofreeze-resume-map
-  (let ((map (make-sparse-keymap)))
-    (define-key map [remap self-insert-command] #'agnostic-llm--vterm-resume-and-resend)
-    (dolist (k '("SPC" "DEL" "TAB" "RET" "<return>"))
-      (define-key map (kbd k) #'agnostic-llm--vterm-resume-and-resend))
-    (define-key map (kbd "q") #'agnostic-llm--vterm-resume-only)
-    map)
-  "Overlay keymap active while an LLM vterm is auto-frozen.
-Layered above `vterm-copy-mode-map' so it adds resume keys without
-overriding copy-mode's bindings.  Note: this rebinds RET to
-resume-and-send-newline; drop the RET/<return> entries if you prefer
-RET to copy the line (`vterm-copy-mode-done').
-Deliberately binds neither EOF nor SIGINT, so a stray key while reading
-can never end or interrupt the CLI.")
-
-(defun agnostic-llm--vterm-autofreeze-copy-hook ()
-  "Run on `vterm-copy-mode-hook' (fires on BOTH enable and disable).
-On enable of an auto-freeze-initiated copy-mode, install the resume
-overlay map.  On disable, clear our header-line and flag.  Manual
-`vterm-copy-mode' sessions (active flag nil) stay vanilla."
-  (when (agnostic-llm--vterm-autofreeze-p)
-    (cond
-     ((and (bound-and-true-p vterm-copy-mode)
-           agnostic-llm--vterm-autofreeze-active)
-      (set-transient-map agnostic-llm--vterm-autofreeze-resume-map
-                         (lambda () (bound-and-true-p vterm-copy-mode))))
-     ((not (bound-and-true-p vterm-copy-mode))
-      (when agnostic-llm--vterm-autofreeze-active
-        (setq agnostic-llm--vterm-autofreeze-active nil)
-        (setq header-line-format nil))))))
-
-(defun agnostic-llm--vterm-autofreeze-setup ()
-  "Arm the auto-freeze observer buffer-locally for a managed vterm buffer."
-  (when (agnostic-llm--vterm-autofreeze-p)
-    (add-hook 'post-command-hook
-              #'agnostic-llm--vterm-autofreeze-post-command nil t)))
 
 (add-hook 'vterm-mode-hook #'agnostic-llm--vterm-display-fixups)
 

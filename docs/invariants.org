@@ -1,0 +1,40 @@
+#+title: Package invariants
+
+* Provider isolation
+Provider-specific executables, arguments, session stores, model catalogs, and
+callbacks live in ~agnostic-llm-providers~ and are read through
+~agnostic-llm--provider-get~.  Hard-coding a CLI in generic session, bubble,
+menu, or response code prevents additional providers from composing through
+the registry.
+
+* Project roots
+~agnostic-llm--project-root~ selects the nearest marked ancestor, excludes the
+home directory, and honors a buffer-local explicit root.  Bypassing it can
+merge unrelated sessions or persist data under the wrong project.
+
+* Session buffer identity
+~agnostic-llm--session-buffer-prefix~, ~agnostic-llm--session-buffer-name~,
+and ~agnostic-llm-buffer-p~ define session identity.  Creation, promotion,
+switching, toggling, and cycling must use the same rule.
+
+* Persistence
+Prompt history and annotations route through ~agnostic-llm--persistence-dir~.
+Project persistence adds its directory to =.gitignore=; user persistence must
+not write into the repository.
+
+* Bubble identity
+A bubble captures its provider, project root, session identity, model, effort,
+and permission posture buffer-locally when opened.  Later turns and promotion
+must reuse those captured values so a conversation cannot change backend or
+options midway.
+
+* Streaming parsers
+The JSONL process filter retains incomplete fragments between calls.  Session
+transcript parsing skips malformed or partially written lines and extracts
+only genuine assistant response records.  Dropping either property loses
+split events or makes live transcripts unreadable.
+
+* Command execution
+Provider commands are shell-quoted and launched through the configured login
+shell.  This preserves arguments and the PATH, credentials, and environment
+established by shell initialization.
