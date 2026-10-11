@@ -3,7 +3,7 @@
 ;; Copyright (c) 2026 Dmitry Akatov
 ;; Author: Dmitry Akatov <dmitry.akatov@protonmail.com>
 ;; URL: https://github.com/rails-to-cosmos/agnostic-llm
-;; Package-Version: 0.11.0.0.20261002.0
+;; Package-Version: 0.11.1.0.20261011.0
 ;; Package-Requires: ((emacs "28.1") (transient "0.4.0") (vterm "0.0.2"))
 ;; Keywords: convenience, tools
 
@@ -1532,24 +1532,17 @@ where the timer fires but nothing actually changed on disk)."
              (buf (cdr (assoc choice entries))))
         (pop-to-buffer buf)))))
 
-(defun agnostic-llm--buffer-visible-elsewhere-p (buf)
-  "Non-nil if BUF is shown in any visible window other than the selected one."
-  (cl-some (lambda (w) (not (eq w (selected-window))))
-           (get-buffer-window-list buf nil 'visible)))
-
 (defun agnostic-llm--cycle-buffer (direction)
   "Switch current window to the next/previous LLM buffer.
-DIRECTION is +1 (forward) or -1 (backward).  Buffers already visible
-in another window are deprioritized (sorted to the back), so cycling
-prefers ones not yet on screen."
-  (let ((bufs (sort (agnostic-llm--get-buffers)
-                    (lambda (a b)
-                      (let ((va (agnostic-llm--buffer-visible-elsewhere-p a))
-                            (vb (agnostic-llm--buffer-visible-elsewhere-p b)))
-                        (cond
-                         ((and va (not vb)) nil)
-                         ((and (not va) vb) t)
-                         (t (string< (buffer-name a) (buffer-name b)))))))))
+DIRECTION is +1 (forward) or -1 (backward)."
+  (let ((bufs
+         (sort (seq-filter
+                (lambda (buffer)
+                  (string-prefix-p agnostic-llm--session-buffer-prefix
+                                   (buffer-name buffer)))
+                (buffer-list))
+               (lambda (a b)
+                 (string< (buffer-name a) (buffer-name b))))))
     (unless bufs (user-error "No LLM buffers"))
     (let* ((pos (cl-position (current-buffer) bufs))
            (next (if pos

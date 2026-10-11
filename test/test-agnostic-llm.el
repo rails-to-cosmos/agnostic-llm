@@ -430,5 +430,22 @@ A plain `*vterm:…*' buffer is not recognized."
       (kill-buffer buf)
       (when (get-buffer "*vterm:foo*") (kill-buffer "*vterm:foo*")))))
 
+(ert-deftest test-cycle-buffer-discovers-unregistered-session-buffers ()
+  "Cycling visits every live session-prefixed buffer without a registry."
+  (let ((agnostic-llm--buffers (make-hash-table :test 'eq))
+        (first (get-buffer-create "*llm:cycle-a*"))
+        (second (get-buffer-create "*llm:cycle-b*"))
+        (response (get-buffer-create "*llm-response:cycle-a*")))
+    (unwind-protect
+        (save-window-excursion
+          (switch-to-buffer first)
+          (agnostic-llm-next-buffer)
+          (should (eq (current-buffer) second))
+          (agnostic-llm-next-buffer)
+          (should (eq (current-buffer) first))
+          (agnostic-llm-previous-buffer)
+          (should (eq (current-buffer) second)))
+      (mapc #'kill-buffer (list first second response)))))
+
 (provide 'test-agnostic-llm)
 ;;; test-agnostic-llm.el ends here
