@@ -3,7 +3,7 @@
 ;; Copyright (c) 2026 Dmitry Akatov
 ;; Author: Dmitry Akatov <dmitry.akatov@protonmail.com>
 ;; URL: https://github.com/rails-to-cosmos/agnostic-llm
-;; Package-Version: 0.12.0.0.20261025.0
+;; Package-Version: 0.12.1.0.20261025.0
 ;; Package-Requires: ((emacs "28.1") (transient "0.4.0") (vterm "0.0.2"))
 ;; Keywords: convenience, tools
 
@@ -2189,8 +2189,9 @@ lives in the transient scope; `agnostic-llm--menu-open-session' honors it."
   (let ((root  (plist-get (transient-scope) :root))
         (label (plist-get (transient-scope) :label))
         (name (when-let* ((value (ignore-errors
-                                   (agnostic-llm--menu-option-value
-                                    'session-name))))
+                                   (agnostic-llm--menu-option-value-from
+                                    'session-name
+                                    (transient-get-value)))))
                 (agnostic-llm--session-name-slug value))))
     (if (or root label)
         (concat (propertize "Session override →" 'face 'transient-heading)

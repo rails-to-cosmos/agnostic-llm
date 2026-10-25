@@ -258,6 +258,22 @@ would fail to match \"claude-sonnet-5\" and silently lose \"ultracode\"."
       (should (equal (agnostic-llm--menu-effort-description)
                      "Effort [default]")))))
 
+(ert-deftest test-transient-header-shows-live-session-name ()
+  "The pinned buffer name reflects the live session-name infix."
+  (let (arguments)
+    (cl-letf (((symbol-function 'transient-scope)
+               (lambda () '(:label "org-glance")))
+              ((symbol-function 'transient-get-value)
+               (lambda () arguments)))
+      (should (equal (substring-no-properties (agnostic-llm--menu-header))
+                     "Session override → buffer=*llm:org-glance*"))
+      (setq arguments '("--session-name=Worker One"))
+      (should (equal (substring-no-properties (agnostic-llm--menu-header))
+                     "Session override → buffer=*llm:org-glance-worker-one*"))
+      (setq arguments nil)
+      (should (equal (substring-no-properties (agnostic-llm--menu-header))
+                     "Session override → buffer=*llm:org-glance*")))))
+
 (ert-deftest test-transient-infixes-use-canonical-vocabulary ()
   "The menu's infixes are generated from its canonical vocabulary."
   (dolist (pair '((btw . agnostic-llm--menu-btw-option)
