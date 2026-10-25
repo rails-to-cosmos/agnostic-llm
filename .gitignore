@@ -8,3 +8,4 @@
 .llm/
 .agnostic-llm/
 /.claude/
+/dist/packages/

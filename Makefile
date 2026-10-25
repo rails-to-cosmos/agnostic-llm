@@ -97,3 +97,6 @@ bump-version:
 	sed "s/^;; Package-Version: .*/;; Package-Version: $$new/" $(PACKAGE) > "$$tmp"; \
 	cat "$$tmp" > $(PACKAGE); \
 	echo "agnostic-llm: $$cur -> $$new"
+
+ELPA_TOOLS ?= $(abspath ../elpa)
+-include $(ELPA_TOOLS)/package.mk

@@ -188,3 +188,14 @@ Byte-compiling needs `transient` and `vterm` available; `make compile` runs
 ## License
 
 GPLv3. See file headers and `LICENSE`.
+
+## Local package installation
+
+With the sibling `elpa` checkout available, `make package` builds the declared
+release, `make install-emacs` installs it into `~/.emacs.d`, and `make check-emacs`
+checks its build receipt. Override `ELPA_TOOLS`, `EMACS`, or `EMACS_CONFIG` as needed.
+Normal installs require a clean checkout. `DEV=1` permits working changes and
+same-version replacements. Restart Emacs after updates.
+
+The Lisp header owns the version and dependencies; `packages.json` selects files.
+Local installation and publication use the same shared artifact builder.
