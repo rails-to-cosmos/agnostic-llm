@@ -226,12 +226,14 @@ would fail to match \"claude-sonnet-5\" and silently lose \"ultracode\"."
   (cl-letf (((symbol-function 'transient-args)
              (lambda (_prefix)
                '("--btw" "-c" "--dangerously-skip-permissions"
-                 "--model=gpt-6-astra" "--effort=medium"))))
+                 "--model=gpt-6-astra" "--effort=medium"
+                 "--session-name=worker"))))
     (should (agnostic-llm--menu-switch-p 'btw))
     (should (agnostic-llm--menu-use-cwd-p))
     (should (agnostic-llm--menu-dangerous-p))
     (should (equal (agnostic-llm--menu-option-value 'model) "gpt-6-astra"))
-    (should (equal (agnostic-llm--menu-option-value 'effort) "medium"))))
+    (should (equal (agnostic-llm--menu-option-value 'effort) "medium"))
+    (should (equal (agnostic-llm--menu-option-value 'session-name) "worker"))))
 
 (ert-deftest test-transient-model-and-effort-labels-show-selected-values ()
   "Model and effort labels reflect live menu overrides and defaults."
@@ -262,7 +264,8 @@ would fail to match \"claude-sonnet-5\" and silently lose \"ultracode\"."
                   (cwd . agnostic-llm--menu-cwd-option)
                   (dangerous . agnostic-llm--menu-dangerous-option)
                   (model . agnostic-llm--menu-model-option)
-                  (effort . agnostic-llm--menu-effort-option)))
+                  (effort . agnostic-llm--menu-effort-option)
+                  (session-name . agnostic-llm--menu-session-name-option)))
     (should
      (equal (slot-value (get (cdr pair) 'transient--suffix) 'argument)
             (agnostic-llm--transient-option (car pair))))))
@@ -313,6 +316,120 @@ would fail to match \"claude-sonnet-5\" and silently lose \"ultracode\"."
                              "codex -c --model m --yolo")))))
       (delete-directory dir t))))
 
+(ert-deftest test-claude-named-session-command-creates-with-role-context ()
+  "A fresh Claude session receives its native name and role introduction."
+  (let ((agnostic-llm-provider 'claude)
+        (agnostic-llm-model nil)
+        (agnostic-llm-effort nil)
+        (agnostic-llm-dangerously-skip-permissions nil))
+    (should
+     (equal (agnostic-llm--session-shell-command
+             "/project" nil nil "org-glance-worker"
+             "This session is named worker.")
+            "claude --name org-glance-worker This\\ session\\ is\\ named\\ worker\."))))
+
+(ert-deftest test-fresh-named-session-does-not-continue-unnamed-session ()
+  "A new name wins over an existing unnamed transcript in the same root."
+  (let ((store (make-temp-file "agnostic-llm-test-" t)))
+    (unwind-protect
+        (test-agnostic-llm--with-provider
+            (list :executable "claude" :continue-flag "-c"
+                  :session-name-flag "--name"
+                  :session-dir (file-name-as-directory store)
+                  :session-file-regexp "\\.jsonl\\'")
+          (let ((agnostic-llm-model nil)
+                (agnostic-llm-effort nil)
+                (agnostic-llm-dangerously-skip-permissions nil)
+                (dir (agnostic-llm--session-dir "/project")))
+            (make-directory dir t)
+            (with-temp-file (expand-file-name "unnamed.jsonl" dir))
+            (should (equal
+                     (agnostic-llm--session-shell-command
+                      "/project" nil nil "project--worker" "role")
+                     "claude --name project--worker role"))))
+      (delete-directory store t))))
+
+(ert-deftest test-claude-named-session-finds-custom-title ()
+  "Claude's newest matching custom title resolves to its transcript id."
+  (let ((store (make-temp-file "agnostic-llm-test-" t)))
+    (unwind-protect
+        (test-agnostic-llm--with-provider
+            (list :session-dir (file-name-as-directory store))
+          (let ((dir (agnostic-llm--session-dir "/project")))
+            (make-directory dir t)
+            (with-temp-file (expand-file-name "session-id.jsonl" dir)
+              (insert "{\"type\":\"custom-title\",\"customTitle\":\"org-glance-worker\"}\n"))
+            (should (equal "session-id"
+                           (agnostic-llm--claude-named-session
+                            "/project" "org-glance-worker")))))
+      (delete-directory store t))))
+
+(ert-deftest test-codex-named-session-finds-index-entry ()
+  "Codex resolves a name to the matching project rollout id."
+  (let ((home (make-temp-file "agnostic-llm-test-" t)))
+    (unwind-protect
+        (let ((sessions (expand-file-name "sessions/" home))
+              (project (expand-file-name "project/" home)))
+          (make-directory sessions)
+          (make-directory project)
+          (with-temp-file (expand-file-name "session_index.jsonl" home)
+            (insert "{\"id\":\"new\",\"thread_name\":\"worker\"}\n"))
+          (with-temp-file (expand-file-name "rollout-new.jsonl" sessions)
+            (insert (format "{\"type\":\"session_meta\",\"payload\":{\"id\":\"new\",\"cwd\":%S,\"originator\":\"codex-tui\"}}\n"
+                            (directory-file-name project))))
+          (test-agnostic-llm--with-provider
+              (list :session-dir sessions
+                    :session-file-regexp "rollout-.*\\.jsonl\\'")
+            (should (equal "new"
+                           (agnostic-llm--codex-named-session
+                            project "worker")))))
+      (delete-directory home t))))
+
+(ert-deftest test-session-name-slug-normalizes-buffer-component ()
+  "Session role names become stable lowercase buffer-name components."
+  (should (equal "review-worker-2"
+                 (agnostic-llm--session-name-slug " Review / Worker 2 "))))
+
+(ert-deftest test-named-session-builds-independent-buffer-and-provider-identity ()
+  "A role name drives buffer identity, provider identity, and first input."
+  (let ((agnostic-llm-provider 'codex)
+        (current-prefix-arg nil)
+        opened command-args)
+    (cl-letf (((symbol-function 'agnostic-llm--named-session)
+               (lambda (_root _name) nil))
+              ((symbol-function 'agnostic-llm--provider-get)
+               (lambda (key) (when (eq key :session-rename-command)
+                               "/rename %s")))
+              ((symbol-function 'agnostic-llm--session-shell-command)
+               (lambda (&rest args) (setq command-args args) "codex"))
+              ((symbol-function 'agnostic-llm--open-vterm)
+               (lambda (&rest args) (setq opened args))))
+      (agnostic-llm "/project/" "org-glance" "Worker"))
+    (should (equal (car opened) "*llm:org-glance-worker*"))
+    (should (equal (nth 3 command-args) "org-glance--worker"))
+    (should (equal (nth 4 opened) "org-glance--worker"))
+    (should (equal (nth 5 opened)
+                   '("/rename org-glance--worker"
+                     "This session is named worker. Treat that name as your role in this project.")))))
+
+(ert-deftest test-named-session-resumes-provider-id-without-reintroduction ()
+  "A recorded named session resumes exactly and receives no startup input."
+  (let ((agnostic-llm-provider 'codex)
+        (current-prefix-arg nil)
+        opened command-args)
+    (cl-letf (((symbol-function 'agnostic-llm--named-session)
+               (lambda (_root name)
+                 (and (equal name "org-glance--worker") "thread-id")))
+              ((symbol-function 'agnostic-llm--provider-get) (lambda (_key) nil))
+              ((symbol-function 'agnostic-llm--session-shell-command)
+               (lambda (&rest args) (setq command-args args) "codex resume thread-id"))
+              ((symbol-function 'agnostic-llm--open-vterm)
+               (lambda (&rest args) (setq opened args))))
+      (agnostic-llm "/project/" "org-glance" "worker"))
+    (should (equal (nth 2 command-args) "thread-id"))
+    (should-not (nth 3 command-args))
+    (should-not (nth 5 opened))))
+
 (ert-deftest test-shell-argv-execs-through-user-shell ()
   "The CLI command is exec'd through `agnostic-llm-shell' with its args."
   (let ((agnostic-llm-shell "/bin/zsh")
@@ -353,6 +470,18 @@ would fail to match \"claude-sonnet-5\" and silently lose \"ultracode\"."
     (should
      (equal (agnostic-llm--session-shell-command "/project" nil "session-id")
             "codex resume session-id --model gpt-5.6-terra -c model_reasoning_effort\\=high --yolo"))))
+
+(ert-deftest test-codex-new-name-does-not-resume-last-session ()
+  "A fresh Codex name starts independently before its rename command."
+  (let ((agnostic-llm-provider 'codex)
+        (agnostic-llm-model nil)
+        (agnostic-llm-effort nil)
+        (agnostic-llm-dangerously-skip-permissions nil))
+    (cl-letf (((symbol-function 'agnostic-llm--codex-session-file)
+               (lambda (&rest _) "/recorded.jsonl")))
+      (should (equal (agnostic-llm--session-shell-command
+                      "/project" nil nil "project--worker" "role")
+                     "codex")))))
 
 (ert-deftest test-codex-bubble-command-starts-and-resumes ()
   "Codex bubbles start with exec and continue with exec resume."

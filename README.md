@@ -20,6 +20,10 @@ is the default. Roadmap in
   `*llm:PROJECT*` [`vterm`](https://github.com/akermu/emacs-libvterm)
   running the provider's CLI (`claude` by default), one per project root. It
   continues the most recent session when one exists.
+- **Named sessions** — `-n worker` opens an independent
+  `*llm:PROJECT-worker*` conversation, assigns the provider-native session
+  name, and introduces `worker` as the model's role on its first turn. Claude
+  starts with `--name`; Codex receives `/rename` before the introduction.
 - **Prompt buffer** — `agnostic-llm-prompt` composes a multi-line prompt with
   `@file` completion (project-relative), auto-prepending file/region context,
   and hands it to the session. Prompts are saved to per-project history.
@@ -99,8 +103,10 @@ add it to your `load-path`:
 | `S` / `D` | Send FIXMEs / TODOs to the LLM |
 | `G` | Grep TODO/FIXME/HACK/XXX            |
 
-The `-m` (model), `-e` (effort), `-d` (skip permissions), `-c` (current dir),
-and `-b` (`/btw` prefix) switches apply to the launched command.
+The `-m` (model), `-e` (effort), `-n` (session name), `-d` (skip
+permissions), `-c` (current dir), and `-b` (`/btw` prefix) switches apply to
+the launched command. Named sessions resume by provider id and coexist under
+one project root.
 The menu exports one provider-neutral option vocabulary. Each provider's
 `:option-vocabulary` derives its native argv from those semantic options—for
 example, `-d` becomes `--dangerously-skip-permissions` for Claude and `--yolo`

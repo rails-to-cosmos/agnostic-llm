@@ -3,14 +3,14 @@
 ;; Copyright (c) 2026 Dmitry Akatov
 ;; Author: Dmitry Akatov <dmitry.akatov@protonmail.com>
 ;; URL: https://github.com/rails-to-cosmos/agnostic-llm
-;; Package-Version: 0.11.1.0.20261011.1
+;; Package-Version: 0.12.0.0.20261025.0
 ;; Package-Requires: ((emacs "28.1") (transient "0.4.0") (vterm "0.0.2"))
 ;; Keywords: convenience, tools
 
 ;;; Commentary:
 ;;
-;; Drive an agentic CLI from Emacs.  Each project gets a dedicated
-;; `*llm:PROJECT*' vterm; a multi-line prompt buffer with @file completion
+;; Drive an agentic CLI from Emacs.  Each project gets a default
+;; `*llm:PROJECT*' vterm plus optional named sessions; a prompt buffer
 ;; feeds it, and a throwaway "bubble" streams a one-shot reply inline
 ;; without disturbing the main session.  `agnostic-llm-show-last-response'
 ;; renders the latest assistant turn from the session JSONL into a read-only
@@ -73,6 +73,9 @@ the Claude CLI."
             :print-flag          "-p"
             :session-id-flag     "--session-id"
             :resume-flag         "--resume"
+            :session-name-flag   "--name"
+            :named-session-function agnostic-llm--claude-named-session
+            :named-sessions-function agnostic-llm--claude-named-sessions
             :option-vocabulary   ((model "--model" "%s")
                                   (effort "--effort" "%s")
                                   (dangerous "--dangerously-skip-permissions"))
@@ -98,6 +101,9 @@ the Claude CLI."
            :session-file-regexp "rollout-.*\\.jsonl\\'"
            :model-prefix        ""
            :session-command-function agnostic-llm--codex-session-command
+           :named-session-function   agnostic-llm--codex-named-session
+           :named-sessions-function  agnostic-llm--codex-named-sessions
+           :session-rename-command   "/rename %s"
            :bubble-command-function  agnostic-llm--codex-bubble-command
            :session-file-function    agnostic-llm--codex-session-file
            :extract-response-function agnostic-llm--codex-extract-last-response
@@ -119,6 +125,7 @@ one.  PLIST fields:
                        and `dangerous'; a \"%s\" token receives the value.
   :session-id-flag     pin a stable session id (bubble turns).
   :resume-flag         resume a session by id.
+  :session-name-flag   name a new interactive session.
   :session-dir         session-store root; the project directory encodes
                        into one component under it.
   :session-file-regexp matches a session transcript there (newest by
@@ -134,6 +141,12 @@ fields may supply function symbols in `:session-command-function',
 `:bubble-command-function', `:session-file-function', and
 `:extract-response-function'.  `:bubble-json-events' selects the Codex-style
 JSONL event filter, which also learns the server-assigned session id.
+
+Named sessions use `:named-session-function' to resolve a display name to a
+resume id and `:named-sessions-function' to enumerate `(NAME ID FILE)' records
+for a project root.  A provider without `:session-name-flag' may expose an
+interactive `:session-rename-command' template; `%s' receives the
+shell-independent name.
 
 Add an entry and point `agnostic-llm-provider' at it to drive another CLI.
 See docs/multi-backend-design.org."
@@ -198,13 +211,40 @@ the CLI under Emacs's own environment."
   "Shell COMMAND wrapped for `vterm-shell': its `agnostic-llm--shell-argv', quoted."
   (mapconcat #'shell-quote-argument (agnostic-llm--shell-argv command) " "))
 
-(defun agnostic-llm--open-vterm (name command &optional same-window)
+(defvar-local agnostic-llm-session-name nil
+  "User-facing role name of this session, or nil for the default session.")
+
+(defvar-local agnostic-llm-session-label nil
+  "Provider-native display name of this session, or nil when unnamed.")
+
+(defun agnostic-llm--send-startup-input (buffer text)
+  "Send one startup TEXT line to live vterm BUFFER."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (when (process-live-p (get-buffer-process buffer))
+        (vterm-send-string text)
+        (vterm-send-return)))))
+
+(defun agnostic-llm--schedule-startup-inputs (buffer inputs)
+  "Send INPUTS to BUFFER in order after its provider TUI starts."
+  (cl-loop for text in inputs
+           for delay from 0.5 by 0.5
+           do (run-at-time delay nil #'agnostic-llm--send-startup-input
+                           buffer text)))
+
+(defun agnostic-llm--open-vterm
+    (name command &optional same-window session-name session-label startup-inputs)
   "Open an LLM vterm NAME running COMMAND via `agnostic-llm--shell-wrap'.
-Pops to another window unless SAME-WINDOW."
+Pops to another window unless SAME-WINDOW.  SESSION-NAME and SESSION-LABEL
+become buffer-local identity.  STARTUP-INPUTS are submitted after launch."
   (let ((vterm-shell (agnostic-llm--shell-wrap command))
         (provider agnostic-llm-provider))
     (if same-window (vterm name) (vterm-other-window name))
-    (setq-local agnostic-llm-provider provider)))
+    (setq-local agnostic-llm-provider provider)
+    (setq-local agnostic-llm-session-name session-name)
+    (setq-local agnostic-llm-session-label session-label)
+    (when startup-inputs
+      (agnostic-llm--schedule-startup-inputs (current-buffer) startup-inputs))))
 
 (defcustom agnostic-llm-project-root-markers
   '(".git" ".claude" "CLAUDE.md" ".codex" "AGENTS.md")
@@ -437,6 +477,14 @@ by `agnostic-llm', `agnostic-llm--bubble-promote', and
 `agnostic-llm--session-buffer-prefix'."
   (format "%s%s*" agnostic-llm--session-buffer-prefix label))
 
+(defun agnostic-llm--session-name-slug (name)
+  "Return NAME as a lowercase dash-separated buffer-name component."
+  (let ((slug (string-trim
+               (replace-regexp-in-string
+                "[^[:alnum:]]+" "-" (downcase (string-trim name)))
+               "-+" "-+")))
+    (unless (string-empty-p slug) slug)))
+
 (defun agnostic-llm-buffer-p (&optional buffer)
   "Return non-nil if BUFFER (default: current buffer) is an LLM buffer."
   (string-prefix-p agnostic-llm--session-buffer-prefix
@@ -456,47 +504,181 @@ claude's layout."
                   (directory-file-name (expand-file-name dir)))))
     (expand-file-name encoded (agnostic-llm--provider-get :session-dir))))
 
+(defun agnostic-llm--jsonl-last-value (file key)
+  "Return the last string value for KEY in JSONL FILE's 64 KiB prefix."
+  (let (value)
+    (when (file-readable-p file)
+      (with-temp-buffer
+        (insert-file-contents file nil 0 65536)
+        (goto-char (point-min))
+        (while (not (eobp))
+          (let ((line (buffer-substring-no-properties
+                       (line-beginning-position) (line-end-position))))
+            (condition-case nil
+                (when-let* ((record (json-parse-string line :object-type 'alist))
+                            (candidate (alist-get key record))
+                            ((stringp candidate)))
+                  (setq value candidate))
+              (json-error nil)))
+          (forward-line 1))))
+    value))
+
+(defun agnostic-llm--claude-named-session (root name)
+  "Return the session id named NAME under Claude project ROOT, or nil."
+  (let ((dir (agnostic-llm--session-dir root))
+        match)
+    (when (file-directory-p dir)
+      (dolist (file (directory-files dir t "\\.jsonl\\'" t))
+        (when (equal name (agnostic-llm--jsonl-last-value file 'customTitle))
+          (when (or (null match)
+                    (time-less-p (file-attribute-modification-time
+                                  (file-attributes (cdr match)))
+                                 (file-attribute-modification-time
+                                  (file-attributes file))))
+            (setq match (cons (file-name-base file) file))))))
+    (car match)))
+
+(defun agnostic-llm--claude-named-sessions (root)
+  "Return Claude's named `(NAME ID FILE)' sessions under project ROOT."
+  (let ((dir (agnostic-llm--session-dir root))
+        result)
+    (when (file-directory-p dir)
+      (dolist (file (directory-files dir t "\\.jsonl\\'" t))
+        (when-let* ((name (agnostic-llm--jsonl-last-value file 'customTitle)))
+          (push (list name (file-name-base file) file) result))))
+    (nreverse result)))
+
+(defun agnostic-llm--codex-name-index ()
+  "Return Codex's current session-name alist, newest entry winning."
+  (let* ((store (expand-file-name (agnostic-llm--provider-get :session-dir)))
+         (index (expand-file-name "session_index.jsonl"
+                                  (file-name-directory
+                                   (directory-file-name store))))
+         result)
+    (when (file-readable-p index)
+      (with-temp-buffer
+        (insert-file-contents index)
+        (goto-char (point-min))
+        (while (not (eobp))
+          (let ((line (buffer-substring-no-properties
+                       (line-beginning-position) (line-end-position))))
+            (condition-case nil
+                (let* ((record (json-parse-string line :object-type 'alist))
+                       (id (alist-get 'id record))
+                       (name (alist-get 'thread_name record)))
+                  (when (and (stringp id) (stringp name))
+                    (setf (alist-get id result nil nil #'equal) name)))
+              (json-error nil)))
+          (forward-line 1))))
+    result))
+
+(defun agnostic-llm--codex-named-session (root name)
+  "Return the Codex session id named NAME under project ROOT, or nil."
+  (cadr (cl-find name (agnostic-llm--codex-named-sessions root)
+                 :key #'car :test #'equal)))
+
+(defun agnostic-llm--codex-session-id (file)
+  "Return the session id in Codex rollout FILE, or nil."
+  (when (file-readable-p file)
+    (with-temp-buffer
+      (insert-file-contents file nil 0 16384)
+      (goto-char (point-min))
+      (condition-case nil
+          (let* ((record (json-parse-string
+                          (buffer-substring-no-properties
+                           (line-beginning-position) (line-end-position))
+                          :object-type 'alist))
+                 (payload (alist-get 'payload record)))
+            (or (alist-get 'session_id payload) (alist-get 'id payload)))
+        (json-error nil)))))
+
+(defun agnostic-llm--codex-named-sessions (root)
+  "Return Codex's named `(NAME ID FILE)' sessions under project ROOT."
+  (let ((store (expand-file-name (agnostic-llm--provider-get :session-dir)))
+        (regexp (agnostic-llm--provider-get :session-file-regexp))
+        (names (agnostic-llm--codex-name-index))
+        result)
+    (when (file-directory-p store)
+      (dolist (file (directory-files-recursively store regexp))
+        (pcase-let ((`(,cwd . ,originator)
+                     (agnostic-llm--codex-session-meta file)))
+          (when (and cwd (file-equal-p cwd root)
+                     (equal originator "codex-tui"))
+            (when-let* ((id (agnostic-llm--codex-session-id file))
+                        (name (alist-get id names nil nil #'equal)))
+              (push (list name id file) result))))))
+    (nreverse result)))
+
+(defun agnostic-llm--named-session (root name)
+  "Return the active provider's resume id for NAME under ROOT, or nil."
+  (when-let* ((finder (agnostic-llm--provider-get :named-session-function)))
+    (funcall finder root name)))
+
+(defun agnostic-llm--named-sessions (root)
+  "Return active-provider named sessions under ROOT as `(NAME ID FILE)'."
+  (when-let* ((finder (agnostic-llm--provider-get :named-sessions-function)))
+    (funcall finder root)))
+
+(defun agnostic-llm--session-introduction (name)
+  "Return the first-turn identity message for session NAME."
+  (format "This session is named %s. Treat that name as your role in this project."
+          name))
+
 (defun agnostic-llm--shell-command-from-argv (argv)
   "Return a safely shell-quoted command string for ARGV."
   (mapconcat #'shell-quote-argument argv " "))
 
-(defun agnostic-llm--codex-session-command (root fresh resume-id model effort dangerous)
+(defun agnostic-llm--codex-session-command
+    (root fresh resume-id model effort dangerous &optional name introduction)
   "Build a Codex interactive command for ROOT.
 FRESH suppresses continuation; RESUME-ID selects one exact session.
-MODEL, EFFORT, and DANGEROUS control the corresponding Codex options."
+MODEL, EFFORT, and DANGEROUS control the corresponding Codex options.
+NAME and INTRODUCTION describe a new named session."
+  (ignore introduction)
   (let* ((executable (agnostic-llm--provider-get :executable))
          (base (cond
                (resume-id (list executable "resume" resume-id))
                (fresh (list executable))
+               (name (list executable))
                ((agnostic-llm--codex-session-file root t)
                 (list executable "resume" "--last"))
                (t (list executable)))))
     (agnostic-llm--shell-command-from-argv
      (append base (agnostic-llm--provider-options-args model effort dangerous)))))
 
-(defun agnostic-llm--session-shell-command (root &optional fresh resume-id)
+(defun agnostic-llm--session-shell-command
+    (root &optional fresh resume-id name introduction)
   "Return the shell command launching the provider in ROOT.
 Adds the `:continue-flag' when the current directory has a recorded
 session.  Appends the provider vocabulary's `model', `effort', and
 `dangerous' arguments when `agnostic-llm-model', `agnostic-llm-effort', and
 `agnostic-llm-dangerously-skip-permissions' are respectively set.  With
-FRESH, never continue; with RESUME-ID, resume that exact session."
+FRESH, never continue; with RESUME-ID, resume that exact session.  NAME is a
+provider-native name for a new session; INTRODUCTION is its first prompt."
   (if-let* ((builder (agnostic-llm--provider-get :session-command-function)))
       (funcall builder root fresh resume-id agnostic-llm-model agnostic-llm-effort
-               agnostic-llm-dangerously-skip-permissions)
+               agnostic-llm-dangerously-skip-permissions name introduction)
     (let* ((exe (agnostic-llm--provider-get :executable))
            (base (cond
                   (resume-id
                    (format "%s %s %s" exe (agnostic-llm--provider-get :resume-flag)
                            (shell-quote-argument resume-id)))
+                  ((and name (agnostic-llm--provider-get :session-name-flag))
+                   (format "%s %s %s" exe
+                           (agnostic-llm--provider-get :session-name-flag)
+                           (shell-quote-argument name)))
                   ((and (not fresh) (agnostic-llm--session-file root))
                    (concat exe " " (agnostic-llm--provider-get :continue-flag)))
                   (t exe)))
            (options (agnostic-llm--provider-options-args
                      agnostic-llm-model agnostic-llm-effort
-                     agnostic-llm-dangerously-skip-permissions)))
-      (if options
-          (concat base " " (agnostic-llm--shell-command-from-argv options))
+                     agnostic-llm-dangerously-skip-permissions))
+           (argv (append options
+                         (and name introduction
+                              (agnostic-llm--provider-get :session-name-flag)
+                              (list introduction)))))
+      (if argv
+          (concat base " " (agnostic-llm--shell-command-from-argv argv))
         base))))
 
 ;;; Show last response in a side buffer
@@ -695,11 +877,13 @@ the top."
                               (inhibit-same-window . t)))))))
 
 ;;;###autoload
-(defun agnostic-llm (&optional user-root label)
+(defun agnostic-llm (&optional user-root label session-name)
   "Open the LLM CLI in a vterm buffer named *llm:project*.
 With non-nil USER-ROOT, target that directory instead of the current
-project.  With non-nil LABEL, name the buffer *llm:LABEL* instead of
-deriving the label from the project directory's final path component.
+project.  With non-nil LABEL, use it as the buffer-label base instead of
+deriving one from the project directory.  SESSION-NAME identifies an
+independent named conversation, appends its slug to LABEL, and is presented to
+the model as its role on the first turn.
 Without prefix: reuse the existing buffer, or create one.
 With \\[universal-argument]: new buffer, continue session if possible.
 With \\[universal-argument] \\[universal-argument]: new buffer, fresh session."
@@ -710,16 +894,47 @@ With \\[universal-argument] \\[universal-argument]: new buffer, fresh session."
                            (directory-file-name (expand-file-name user-root)))
                           user-root)
                   (agnostic-llm--project-label default-directory)))
-               (label (or label derived))
+               (role-name (and session-name (string-trim session-name)))
+               (role-name (unless (string-empty-p (or role-name ""))
+                            role-name))
+               (session-name
+                (when role-name
+                  (or (agnostic-llm--session-name-slug role-name)
+                      (user-error "Session name needs an alphanumeric character"))))
+               (base-label (or label derived))
+               (label (if session-name
+                          (format "%s-%s" base-label session-name)
+                        base-label))
+               (provider-name
+                (and session-name
+                     (format "%s--%s" base-label session-name)))
                (default-directory (or user-root root default-directory))
                (base (agnostic-llm--session-buffer-name label))
-               (prefix (prefix-numeric-value current-prefix-arg)))
+               (prefix (prefix-numeric-value current-prefix-arg))
+               (resume-id (and session-name
+                               (agnostic-llm--named-session root provider-name)))
+               (introduction (and session-name (null resume-id)
+                                  (agnostic-llm--session-introduction
+                                   session-name)))
+               (rename-template (and session-name (null resume-id)
+                                     (agnostic-llm--provider-get
+                                      :session-rename-command)))
+               (startup-inputs
+                (and rename-template
+                     (list (format rename-template provider-name) introduction)))
+               (command (agnostic-llm--session-shell-command
+                         root nil resume-id
+                         (and session-name (null resume-id) provider-name)
+                         introduction)))
     (cond ((= prefix 1)
            (let* ((base-buffer (get-buffer base))
                   (existing
                    (or (and base-buffer
                             (eq (buffer-local-value 'agnostic-llm-provider base-buffer)
                                 agnostic-llm-provider)
+                            (equal (buffer-local-value 'agnostic-llm-session-name
+                                                       base-buffer)
+                                   session-name)
                             base-buffer)
                        (seq-find
                         (lambda (buffer)
@@ -727,6 +942,9 @@ With \\[universal-argument] \\[universal-argument]: new buffer, fresh session."
                                (get-buffer-process buffer)
                                (eq (buffer-local-value 'agnostic-llm-provider buffer)
                                    agnostic-llm-provider)
+                               (equal (buffer-local-value 'agnostic-llm-session-name
+                                                          buffer)
+                                      session-name)
                                (file-equal-p
                                 (buffer-local-value 'default-directory buffer)
                                 default-directory)))
@@ -739,13 +957,18 @@ With \\[universal-argument] \\[universal-argument]: new buffer, fresh session."
                (when existing (kill-buffer existing))
                (agnostic-llm--open-vterm
                 (if base-buffer (generate-new-buffer-name base) base)
-                (agnostic-llm--session-shell-command root))))))
+                command nil session-name provider-name
+                startup-inputs)))))
           ((= prefix 4)
-           (agnostic-llm--open-vterm (generate-new-buffer-name base)
-                                     (agnostic-llm--session-shell-command root)))
+           (agnostic-llm--open-vterm
+            (generate-new-buffer-name base) command nil session-name
+            provider-name startup-inputs))
           ((>= prefix 16)
-           (agnostic-llm--open-vterm (generate-new-buffer-name base)
-                                     (agnostic-llm--session-shell-command root t))))
+           (agnostic-llm--open-vterm
+            (generate-new-buffer-name base)
+            (agnostic-llm--session-shell-command
+             root t nil provider-name introduction)
+            nil session-name provider-name startup-inputs)))
     ;; A session launched with an explicit USER-ROOT pins its persistence and
     ;; scope to that directory: `agnostic-llm--project-root' in this vterm now
     ;; returns USER-ROOT instead of walking up to an ancestor project marker.
@@ -1767,7 +1990,8 @@ Source-file comment is left untouched — remove it manually if desired."
       (cwd . "-c")
       (dangerous . "--dangerously-skip-permissions")
       (model . "--model=")
-      (effort . "--effort="))
+      (effort . "--effort=")
+      (session-name . "--session-name="))
     "Provider-neutral arguments exported by `agnostic-llm-menu'.
 These are UI vocabulary.  Provider command lines are derived independently
 from each provider's `:option-vocabulary'."))
@@ -1908,8 +2132,9 @@ Clear saved model or effort defaults that the new provider does not support."
          (root (or (plist-get scope :root)
                    (when (agnostic-llm--menu-use-cwd-p) default-directory)))
          (label (plist-get scope :label))
+         (session-name (agnostic-llm--menu-option-value 'session-name))
          (current-prefix-arg nil))
-    (agnostic-llm root label)))
+    (agnostic-llm root label session-name)))
 
 (defun agnostic-llm--menu-model-description ()
   "Return the model switch label with its current menu value."
@@ -1953,20 +2178,34 @@ Clear saved model or effort defaults that the new provider does not support."
              (agnostic-llm-effort-choices-for-model
               (agnostic-llm--menu-current-model))))
 
+(agnostic-llm--define-menu-option agnostic-llm--menu-session-name-option session-name
+  :class 'transient-option
+  :description "Session name")
+
 (defun agnostic-llm--menu-header ()
   "Return the options-group title, flagging any pinned session override.
 The override -- directory ROOT and buffer LABEL passed to `agnostic-llm-menu' --
 lives in the transient scope; `agnostic-llm--menu-open-session' honors it."
   (let ((root  (plist-get (transient-scope) :root))
-        (label (plist-get (transient-scope) :label)))
+        (label (plist-get (transient-scope) :label))
+        (name (when-let* ((value (ignore-errors
+                                   (agnostic-llm--menu-option-value
+                                    'session-name))))
+                (agnostic-llm--session-name-slug value))))
     (if (or root label)
         (concat (propertize "Session override →" 'face 'transient-heading)
                 (when root  (concat " dir="
                                     (propertize (abbreviate-file-name (directory-file-name root))
                                                 'face 'transient-value)))
-                (when label (concat " buffer="
-                                    (propertize (agnostic-llm--session-buffer-name label)
-                                                'face 'transient-value))))
+                (when label
+                  (let ((display-label
+                         (if name
+                             (format "%s-%s" label name)
+                           label)))
+                    (concat " buffer="
+                            (propertize
+                             (agnostic-llm--session-buffer-name display-label)
+                             'face 'transient-value)))))
       "Options")))
 
 ;;;###autoload
@@ -1980,7 +2219,8 @@ current project; the header highlights the override."
    ("-c" agnostic-llm--menu-cwd-option)
    ("-d" agnostic-llm--menu-dangerous-option)
    ("-m" agnostic-llm--menu-model-option)
-   ("-e" agnostic-llm--menu-effort-option)]
+   ("-e" agnostic-llm--menu-effort-option)
+   ("-n" agnostic-llm--menu-session-name-option)]
   [["Session"
     ("c" agnostic-llm--menu-open-session)
     ("v" "Vterm in project"       agnostic-llm-vterm-here)

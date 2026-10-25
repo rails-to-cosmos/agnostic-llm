@@ -17,6 +17,11 @@ merge unrelated sessions or persist data under the wrong project.
 and ~agnostic-llm-buffer-p~ define session identity.  Creation, promotion,
 switching, toggling, and cycling must use the same rule.
 
+* Named sessions
+A named session is identified by provider, project root, and canonical name.
+Its buffer label, provider-native name, resume id, and first-turn role
+introduction derive from that identity.  Resumes never repeat the introduction.
+
 * Persistence
 Prompt history and annotations route through ~agnostic-llm--persistence-dir~.
 Project persistence adds its directory to =.gitignore=; user persistence must
