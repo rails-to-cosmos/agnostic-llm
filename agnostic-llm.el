@@ -3,7 +3,7 @@
 ;; Copyright (c) 2026 Dmitry Akatov
 ;; Author: Dmitry Akatov <dmitry.akatov@protonmail.com>
 ;; URL: https://github.com/rails-to-cosmos/agnostic-llm
-;; Package-Version: 0.12.1.0.20261025.0
+;; Package-Version: 0.13.0.0.20261109.0
 ;; Package-Requires: ((emacs "28.1") (transient "0.4.0") (vterm "0.0.2"))
 ;; Keywords: convenience, tools
 
@@ -2209,7 +2209,7 @@ lives in the transient scope; `agnostic-llm--menu-open-session' honors it."
                              'face 'transient-value)))))
       "Options")))
 
-;;;###autoload
+;;;###autoload (autoload (quote agnostic-llm-menu) "agnostic-llm" nil t)
 (transient-define-prefix agnostic-llm-menu (&optional root label)
   "LLM CLI commands.
 ROOT and LABEL, when supplied (e.g. by an integration such as org-glance), pin

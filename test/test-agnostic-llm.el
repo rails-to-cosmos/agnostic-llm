@@ -590,5 +590,31 @@ A plain `*vterm:…*' buffer is not recognized."
           (should (eq (current-buffer) second)))
       (mapc #'kill-buffer (list first second response)))))
 
+(ert-deftest test-autoloads-stub-transient-menu ()
+  "Generated autoloads stub `agnostic-llm-menu' instead of copying it.
+A copied `transient-define-prefix' defines the menu without loading its
+infixes, so opening it signals \"Suffix command ... is not defined\"."
+  (let* ((dir (make-temp-file "agnostic-llm-autoloads-" t))
+         (out (expand-file-name "autoloads.el" dir))
+         forms)
+    (unwind-protect
+        (progn
+          (let ((inhibit-message t))
+            (loaddefs-generate (file-name-directory
+                                (locate-library "agnostic-llm.el"))
+                               out))
+          (with-temp-buffer
+            (insert-file-contents out)
+            (condition-case nil
+                (while t (push (read (current-buffer)) forms))
+              (end-of-file nil))))
+      (delete-directory dir t))
+    (should-not (seq-find (lambda (form)
+                            (string-prefix-p "transient-define-"
+                                             (symbol-name (car-safe form))))
+                          forms))
+    (should (member '(autoload 'agnostic-llm-menu "agnostic-llm" nil t)
+                    forms))))
+
 (provide 'test-agnostic-llm)
 ;;; test-agnostic-llm.el ends here
