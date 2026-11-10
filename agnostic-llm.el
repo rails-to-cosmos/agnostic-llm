@@ -3,7 +3,7 @@
 ;; Copyright (c) 2026 Dmitry Akatov
 ;; Author: Dmitry Akatov <dmitry.akatov@protonmail.com>
 ;; URL: https://github.com/rails-to-cosmos/agnostic-llm
-;; Package-Version: 0.12.1.0.20261028.0
+;; Package-Version: 0.13.0.0.20261109.0
 ;; Package-Requires: ((emacs "28.1") (transient "0.4.0") (vterm "0.0.2"))
 ;; Keywords: convenience, tools
 
@@ -41,13 +41,7 @@
 (require 'project)
 (require 'transient)
 (require 'ansi-color)
-
-(defvar vterm-shell)
-(declare-function vterm "vterm" (&optional buffer-name))
-(declare-function vterm-other-window "vterm" (&optional buffer-name))
-(declare-function vterm-send-string "vterm" (string &optional paste-p))
-(declare-function vterm-send-return "vterm" ())
-(declare-function vterm-insert "vterm" (string))
+(require 'vterm)
 
 ;;; Customization
 
@@ -243,7 +237,6 @@ the CLI under Emacs's own environment."
   "Open an LLM vterm NAME running COMMAND via `agnostic-llm--shell-wrap'.
 Pops to another window unless SAME-WINDOW.  SESSION-NAME and SESSION-LABEL
 become buffer-local identity.  STARTUP-INPUTS are submitted after launch."
-  (require 'vterm)
   (let ((vterm-shell (agnostic-llm--shell-wrap command))
         (provider agnostic-llm-provider))
     (if same-window (vterm name) (vterm-other-window name))
@@ -989,7 +982,6 @@ Without prefix: switch to the last *vterm:LABEL* buffer for the project,
 or create one if none exist.
 With prefix: always create a new vterm buffer."
   (interactive)
-  (require 'vterm)
   (pcase-let* ((`(,label . ,_) (agnostic-llm--project-label default-directory))
                (base (format "*vterm:%s*" label)))
     (if current-prefix-arg
@@ -2217,7 +2209,7 @@ lives in the transient scope; `agnostic-llm--menu-open-session' honors it."
                              'face 'transient-value)))))
       "Options")))
 
-;;;###autoload
+;;;###autoload (autoload (quote agnostic-llm-menu) "agnostic-llm" nil t)
 (transient-define-prefix agnostic-llm-menu (&optional root label)
   "LLM CLI commands.
 ROOT and LABEL, when supplied (e.g. by an integration such as org-glance), pin
@@ -2282,7 +2274,6 @@ to the project's vterm first (reusing or spawning)."
               (if (equal kind "vterm")
                   (agnostic-llm--open-vterm
                    target (agnostic-llm--session-shell-command root) t)
-                (require 'vterm)
                 (vterm target)))))
       (let ((current-prefix-arg nil))
         (agnostic-llm-vterm-here)))))
